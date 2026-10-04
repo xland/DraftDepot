@@ -60,6 +60,8 @@ function askPublishedOnce() {
   DDMsg.invoke("getPublished")
     .then((data) => {
       published = !!(data && data.published);
+      // 这一轮的文章已经交出去了：眼前多半就是发布成功后跳回来的首页，认出来就原地停手
+      if (published) console.log("[DraftDepot] 本轮已发布过，停在首页不动");
     })
     .catch(() => {
       // 问不到就按"没发过"办：最坏是维持原来的跳转行为，不会让人卡在首页
@@ -319,16 +321,18 @@ function convertInline(el, children) {
   return [out];
 }
 
-/** 段落（p 及转成 p 的那些）：定死字号与行高，行内内容留在段内，里头嵌套的块摊平成兄弟段落 */
+/** 段落（p 及转成 p 的那些）：定死字号、行高与对齐，行内内容留在段内，里头嵌套的块摊平成兄弟段落 */
 function convertParagraph(el, children) {
   const tag = el.tagName;
   const block = document.createElement(AS_P.has(tag) ? "p" : tag.toLowerCase());
-  // 原段落的对齐 / 缩进等样式带过去，字号与行高随后压上，保证行高一定大于字号
+  // 原段落的对齐 / 缩进等样式先整条带过来，再由下面几行压上字号、行高与对齐（后写的覆盖先拷来的）
   const style = el.getAttribute("style");
   if (style) block.setAttribute("style", style);
   clearMargin(block); // 原段落样式里带来的 margin 也一并去掉
   block.style.fontSize = HEADING_FONT_SIZE[tag] || FONT_SIZE;
   block.style.lineHeight = LINE_HEIGHT;
+  // 对齐自己说了算：上面拷过来的原样式里可能是居中或两端对齐，这里一律钉回左对齐
+  block.style.textAlign = "left";
 
   const inline = children.filter((child) => !isBlock(child));
   const nested = children.filter(isBlock);
@@ -402,6 +406,7 @@ function forWeiXin(html) {
     const p = document.createElement("p");
     p.style.fontSize = FONT_SIZE;
     p.style.lineHeight = LINE_HEIGHT;
+    p.style.textAlign = "left"; // 与 convertParagraph 一致：这里补出来的段落同样左对齐
     pending.forEach((child) => p.appendChild(child));
     root.appendChild(p);
     pending = [];
@@ -437,6 +442,20 @@ async function fillArticle(useApi) {
 }
 
 /**
+ * 灌一轮，并且无论如何都把"已发过"的标志打上。
+ * 走到这一步就说明本轮的目标页面就是编辑页、文章已经交出去了（getArticle 取走即空，
+ * 见 WindowSite::takeArticle）——灌得成不成都该收尾：漏了的话，发布成功后跳回首页会被认成
+ * "刚登录完停在首页"，又被按老规矩推回编辑页（传图失败这类情况最容易漏）
+ */
+async function fillOnce(useApi) {
+  try {
+    await DDMask.withMask(() => fillArticle(useApi));
+  } finally {
+    await markPublished();
+  }
+}
+
+/**
  * 到了编辑页：等编辑器就绪再把文章灌进去。
  * 就绪优先问微信自己（mp_editor_get_isready），不再靠数 ProseMirror 的个数。
  * 只有 isNew=true 才走 set_content —— 官方说明写得很清楚：这类接口只对新编辑器开放，
@@ -461,13 +480,11 @@ function waitEditorAndFill() {
       if (newEditor) {
         clearInterval(wait);
         // 传图 + 灌标题正文这一整段都盖着遮罩：那期间页面是半截的，别让人插手（见 Mask.js）
-        await DDMask.withMask(() => fillArticle(true));
-        await markPublished();
+        await fillOnce(true);
       } else if ((!jsApi || (state && state.isReady)) && oldEditor) {
         // 拿不到 JSAPI（老页面），或它明说了不是新编辑器：按老办法来
         clearInterval(wait);
-        await DDMask.withMask(() => fillArticle(false));
-        await markPublished();
+        await fillOnce(false);
       }
     } catch (err) {
       console.log("[DraftDepot] 灌文章失败", err);

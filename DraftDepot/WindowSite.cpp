@@ -128,7 +128,12 @@ void WindowSite::markPublished(JsonObject& result)
 
 void WindowSite::isPublished(JsonObject& result)
 {
-	result.SetNamedValue(L"published", JsonValue::CreateBooleanValue(published));
+	// 值一律放在 result 下：DDMsg.invoke 只把回包里的 result 字段交给调用方（见 Msg.js 的 onMessage），
+	// 写在根上会被丢掉——published 拿回来永远是 false，"发完别再把人拽回编辑页"这条就一直不生效。
+	// 同层的几个（takeArticle / handleGetImageUrl / getCookie）本来就是这么写的
+	JsonObject value;
+	value.SetNamedValue(L"published", JsonValue::CreateBooleanValue(published));
+	result.SetNamedValue(L"result", value);
 }
 
 HRESULT WindowSite::onCtrlReady(HRESULT result, ICoreWebView2Controller* ctrl)

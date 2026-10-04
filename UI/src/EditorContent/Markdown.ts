@@ -77,55 +77,45 @@ function renderLink(el: Element): string {
   return `[${text || href}](${target})`;
 }
 
-/** 行内内容：把一段节点摊平成一行 Markdown 文本（里面的 <br> 会变成换行） */
+/**
+ * 行内内容里的一个节点：可能是裸文本，也可能是自带 Markdown 语义的行内元素。
+ *
+ * renderInline 是本系的入口（给它一个父节点，它把子节点摊平成一行），可有些场合手上本来就
+ * 只有一个节点——renderBlocks 攒行内内容时遇到的正是这种：它逐个渲染兄弟节点再拼起来，
+ * 若不经过这一层、直接拿 <img> 去喂 renderInline，渲染到的会是它的子节点（空的），图就没了
+ */
+function renderInlineNode(node: Node): string {
+  if (node.nodeType === Node.TEXT_NODE) return escapeText(node.textContent ?? "");
+  if (node.nodeType !== Node.ELEMENT_NODE) return "";
+  const el = node as Element;
+  switch (el.tagName) {
+    case "BR": return "  \n"; // Markdown 的硬换行：行尾两个空格
+    case "IMG": return renderImage(el);
+    case "A": return renderLink(el);
+    case "CODE": return renderCodeSpan(el.textContent ?? "");
+    case "B":
+    case "STRONG":
+      return wrap("**", renderInline(el));
+    case "I":
+    case "EM":
+      return wrap("*", renderInline(el));
+    case "S":
+    case "DEL":
+    case "STRIKE":
+      return wrap("~~", renderInline(el));
+    case "U": return `<u>${renderInline(el)}</u>`; // Markdown 没有下划线语法，留内联 HTML
+    case "SUP": return `<sup>${renderInline(el)}</sup>`;
+    case "SUB": return `<sub>${renderInline(el)}</sub>`;
+    // span / font 这类只带装饰样式的，与没见过的标签一样：只要里面的文字
+    default: return renderInline(el);
+  }
+}
+
+/** 行内内容：把一段节点的子节点摊平成一行 Markdown 文本（里面的 <br> 会变成换行） */
 function renderInline(node: Node): string {
   let out = "";
   for (const child of Array.from(node.childNodes)) {
-    if (child.nodeType === Node.TEXT_NODE) {
-      out += escapeText(child.textContent ?? "");
-      continue;
-    }
-    if (child.nodeType !== Node.ELEMENT_NODE) continue;
-    const el = child as Element;
-    switch (el.tagName) {
-      case "BR": // Markdown 的硬换行：行尾两个空格
-        out += "  \n";
-        break;
-      case "IMG":
-        out += renderImage(el);
-        break;
-      case "A":
-        out += renderLink(el);
-        break;
-      case "CODE":
-        out += renderCodeSpan(el.textContent ?? "");
-        break;
-      case "B":
-      case "STRONG":
-        out += wrap("**", renderInline(el));
-        break;
-      case "I":
-      case "EM":
-        out += wrap("*", renderInline(el));
-        break;
-      case "S":
-      case "DEL":
-      case "STRIKE":
-        out += wrap("~~", renderInline(el));
-        break;
-      case "U": // Markdown 没有下划线语法，留内联 HTML
-        out += `<u>${renderInline(el)}</u>`;
-        break;
-      case "SUP":
-        out += `<sup>${renderInline(el)}</sup>`;
-        break;
-      case "SUB":
-        out += `<sub>${renderInline(el)}</sub>`;
-        break;
-      default: // span / font 这类只带装饰样式的，与没见过的标签一样：只要里面的文字
-        out += renderInline(el);
-        break;
-    }
+    out += renderInlineNode(child);
   }
   return out;
 }
@@ -161,7 +151,9 @@ function renderList(list: Element): string[] {
         const el = child as Element;
         if (el.tagName === "UL" || el.tagName === "OL") nested.push(el);
         else if (BLOCK_TAGS.has(el.tagName)) content.push(...renderBlocks(el));
-        else head += renderInline(el);
+        // 同 renderBlocks：这里手上的也是一个孤零零的行内节点，
+        // 喂给 renderInline 渲染到的是它的子节点——<li> 直属的链接会只剩下文字
+        else head += renderInlineNode(el);
       }
     }
     if (head.trim()) content.unshift(head.trim());
@@ -172,22 +164,37 @@ function renderList(list: Element): string[] {
   return lines;
 }
 
-/** 块级内容 → 若干行（行与行之间由调用方决定怎么拼：正文块间空一行，列表项内不空行） */
+/**
+ * 块级内容 → 若干行（行与行之间由调用方决定怎么拼：正文块间空一行，列表项内不空行）。
+ *
+ * 两条线的分工：块级子节点各自占行、自己决定里头怎么排（列表不空行、引用逐行加前缀、代码块整块）；
+ * 其余的行内内容（裸文本、span / a / u / img …）一律攒起来，攒到遇见下一个块级子节点为止，
+ * 攒出来的一整串才算一行。
+ * 早先是每个子节点各 push 一行的：同一段里掺着的那些节点本来是一行上的东西
+ * ——“文本 + 链接 + 文本”会被拆成三行，list item 里尤其明显，链接前后各断一下
+ */
 function renderBlocks(node: Node): string[] {
   const lines: string[] = [];
+  let pending: string[] = []; // 攒着的行内内容
+  const flush = () => {
+    const text = pending.join("").trim();
+    if (text) lines.push(text);
+    pending = [];
+  };
   for (const child of Array.from(node.childNodes)) {
     if (child.nodeType === Node.TEXT_NODE) {
-      const text = escapeText(child.textContent ?? "").trim();
-      if (text) lines.push(text);
+      pending.push(escapeText(child.textContent ?? ""));
       continue;
     }
     if (child.nodeType !== Node.ELEMENT_NODE) continue;
     const el = child as Element;
     const level = HEADING_LEVEL[el.tagName];
     if (level) {
+      flush();
       const text = renderInline(el).trim();
       if (text) lines.push(`${"#".repeat(level)} ${text}`);
     } else if (el.tagName === "BLOCKQUOTE") {
+      flush();
       // 引用里的每一行都要带 "> "（空行只带 ">"，不留尾空格），否则只有第一行算引用：
       // renderBlocks 出来的一项可能自己就是好几行（列表、代码块、<br> 造的硬换行），
       // 所以先按块拼好再拆成行，逐行加前缀——光给每项的第一行加，后面那些会掉出引用。
@@ -201,27 +208,26 @@ function renderBlocks(node: Node): string[] {
     } else if (el.tagName === "UL" || el.tagName === "OL") {
       // 同理：一个列表是一个块，项与项之间只换行，不能空行（空行在 Markdown 里是"松散列表"，
       // 项内容会被包成段落，子列表的缩进也容易断）
+      flush();
       const items = renderList(el);
       if (items.length) lines.push(items.join("\n"));
     } else if (el.tagName === "PRE") {
       // 围栏三行是一整个块，绝不能拆开：拆了就变成 ``` 夹着一段正文
+      flush();
       lines.push(renderCodeBlock(el).join("\n"));
     } else if (el.tagName === "HR") {
+      flush();
       lines.push("---");
-    } else if (hasBlockChild(el)) {
-      // div 里还套着块（如粘贴进来的结构）：继续往下拆
+    } else if (BLOCK_TAGS.has(el.tagName)) {
+      // DIV / P / TABLE 这些块自己就是一段：各自占自己那一行，别跟前后的邻居挤在一起
+      flush();
       lines.push(...renderBlocks(el));
     } else {
-      const text = renderInline(el).trim();
-      if (text) lines.push(text); // 空段落不产出：否则正文里会多出一串空行
+      pending.push(renderInlineNode(el)); // 行内：并到同一段里，别占一行
     }
   }
+  flush();
   return lines;
-}
-
-/** 里面还有块级子元素吗（有就继续递归，没有就当一段行内内容） */
-function hasBlockChild(el: Element): boolean {
-  return Array.from(el.children).some((child) => BLOCK_TAGS.has(child.tagName));
 }
 
 export default function toMarkdown(html: string): string {

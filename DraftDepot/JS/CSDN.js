@@ -48,8 +48,10 @@ let filled = false; // 本文档已经灌过一轮：页面自身的后续刷新
 
 /**
  * 正文编辑区：它的 Markdown 源码编辑器是 cledit，编辑区是
- * <pre class="editor__inner" contenteditable="true">，里面每行一个 div.cledit-section
- * （源码 + 着色的 span），不是 textarea
+ * <pre class="editor__inner" contenteditable="true">，不是 textarea。
+ * 里面是 div.cledit-section——按 Markdown 块（标题 / 段落 / 代码块）切的一个个块，不是一行一个；
+ * 换行则是 <span class="lf"><br><span class="hd-lf">\n</span></span>：那个真正的 \n 藏在隐藏的
+ * .hd-lf 里。所以它按 textContent 读出来的正是原始 Markdown 源码（见下面的 currentText）
  */
 function getContentBox() {
   return document.querySelector("pre.editor__inner[contenteditable]");
@@ -120,8 +122,23 @@ function clearBox(el) {
 /** 间隔一拍：写入之后它的处理未必同步收尾，校验前给它一点时间 */
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
-/** 不换行空格：空行位置放一个，免得那一行的盒子塌掉 */
-const NBSP = String.fromCharCode(160);
+/**
+ * 换行节点：照它自己的写法造一个 <span class="lf"><br><span class="hd-lf">\n</span></span>。
+ * <br> 管渲染上的换行，真正那个 \n 藏在隐藏的 .hd-lf 里——它是按 textContent 读源码的，
+ * 换行只能这样带进去：纯文本或 <br> 弄出来的换行，在源码里是看不见的。
+ * 早先那版把行文本直接塞进 section，div 与 div 之间没有 \n，它读回去整篇成一坨，行边界全丢
+ */
+function makeLineFeed() {
+  const lf = document.createElement("span");
+  lf.className = "lf";
+  lf.appendChild(document.createElement("br"));
+  const holder = document.createElement("span");
+  holder.className = "hd-lf";
+  holder.style.display = "none";
+  holder.textContent = "\n";
+  lf.appendChild(holder);
+  return lf;
+}
 
 /**
  * 比对用：空白一律抹掉。
@@ -132,37 +149,41 @@ function stripSpace(text) {
   return (text || "").replace(/\s/g, "");
 }
 
-/** 编辑区里的源码：按渲染取，行才能得到换行（textContent 是行与行直接粘在一起的） */
+/** 编辑区里的源码：换行就在隐藏的 .hd-lf 里，所以 textContent 取出来就是原始 Markdown */
 function currentText(el) {
-  return el.innerText || el.textContent || "";
+  return el.textContent || "";
 }
 
 /**
- * 编辑区里有几行是有内容的：优先数它的行盒子（每行一个 .cledit-section），数不着再按渲染的行数算。
- * 空行不计——它给空行也建盒子（里面塞个不换行空格撑着），而 Markdown 里的空行只是块与块之间的
- * 分隔，不是内容；两边都按"有内容的行数"算才比得起来
+ * 编辑区里有几个换行：数 .lf——它每个换行都在那儿留一个（<br> + 藏着 \n 的 .hd-lf）。
+ * 早先数的是 .cledit-section，那是量错了：section 是它按 Markdown 块切的，一个三行的代码块
+ * 也只占一个 section，跟"物理行数"根本不是一个东西
  */
 function lineCount(el) {
-  const sections = Array.from(el.querySelectorAll(".cledit-section"));
-  if (sections.length) {
-    return sections.filter((section) => stripSpace(section.textContent)).length;
-  }
-  return (el.innerText || "").split("\n").filter((line) => line.trim()).length;
+  return el.querySelectorAll(".lf").length;
 }
 
-/** 行有没有保住：目标有 N 行，编辑区也该差不多 N 行 */
+/** 比对前先抹掉行尾的换行差异：它可能在末尾多留一个换行，那不算写错 */
+function normalizeText(text) {
+  return (text || "").replace(/\r\n/g, "\n").replace(/\s+$/, "");
+}
+
+/** 行有没有保住：目标有 N 行，编辑区里的换行不该少于 N 个 */
 function linesKept(el, text) {
-  const expect = text.split("\n").filter((line) => line.trim()).length;
-  return expect <= 1 || lineCount(el) === expect;
-}
-
-/** 写成了吗：内容是这一份、行结构也在 */
-function checkWritten(el, text) {
-  return stripSpace(currentText(el)) === stripSpace(text) && linesKept(el, text);
+  const expect = normalizeText(text).split("\n").length;
+  return expect <= 1 || lineCount(el) >= expect;
 }
 
 /**
- * 首选写法：给它派发一次带纯文本的 paste，走的就是人手 Ctrl+V 那条流水线。
+ * 写成了吗：源码一字不差（这才是它读回去的那一手），换行数也在。
+ * 旧版只比"抹掉空白后的字数"——字一字不差但换行丢光也判成功，"正文在、挤成两行"就是这么漏过来的
+ */
+function checkWritten(el, text) {
+  return normalizeText(currentText(el)) === normalizeText(text) && linesKept(el, text);
+}
+
+/**
+ * 次选：给它派发一次带纯文本的 paste，走的就是人手 Ctrl+V 那条流水线。
  * 它拿到剪贴板里的文本后会自己按行重建编辑区结构——换行、代码块围栏这些都是这么立起来的。
  * 之前用的是 execCommand("insertText")，那是把整段当"一段文字"插进去，换行符在 <pre> 里能不能
  * 站得住全看它随后的重排，实测糊成了一整行，所以换到这里。
@@ -183,16 +204,22 @@ async function tryPaste(el, text) {
 }
 
 /**
- * 次选：按它自己的行结构直接写 DOM——每行一个 div.cledit-section。
- * 不扮演它的着色（那一堆 span），只保证行边界是对的：它按 DOM 读内容，随后的高亮与预览
- * 会自己重算。空行塞一个不换行空格，免得那行的盒子塌了导致它对不上行
+ * 首选：照它自己的结构写 DOM——每行一个 div.cledit-section，行尾挂一个换行节点。
+ * 不扮演它的着色（那一堆 token span），只保证源码与换行是对的：收下 InputEvent 后它会按整份
+ * 源码重新切块、重新高亮。空行只留一个换行节点：<br> 足够把那一行撑住
  */
 async function writeLines(el, text) {
   clearBox(el);
-  for (const line of text.replace(/\n$/, "").split("\n")) {
+  for (const line of normalizeText(text).split("\n")) {
     const section = document.createElement("div");
     section.className = "cledit-section";
-    section.textContent = line.trim() ? line : NBSP;
+    if (line.trim()) {
+      const token = document.createElement("span");
+      token.className = "token p";
+      token.textContent = line;
+      section.appendChild(token);
+    }
+    section.appendChild(makeLineFeed());
     el.appendChild(section);
   }
   el.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText" }));
@@ -212,10 +239,11 @@ async function tryInsert(el, text) {
 
 /**
  * 把整段 Markdown 写进编辑区：三条路依次试，一条成了就收。
- * 每条都以清空开头，所以怎么重试都不会把正文叠加两遍（上一版就是这么写出两张图的）
+ * 每条都以清空开头，所以怎么重试都不会把正文叠加两遍（上一版就是这么写出两张图的）。
+ * 顺序有讲究：先照它的结构写 DOM——这一条不依赖它的 paste 处理器挂没挂上，也不看编辑命令的脸色
  */
 async function setContent(el, text) {
-  return (await tryPaste(el, text)) || (await writeLines(el, text)) || (await tryInsert(el, text));
+  return (await writeLines(el, text)) || (await tryPaste(el, text)) || (await tryInsert(el, text));
 }
 
 /**
@@ -228,10 +256,11 @@ async function writeContent(el, text) {
     if (await setContent(el, text)) return true;
     await sleep(RETRY_INTERVAL);
   }
-  // 留一条够看懂的日志：期望多少字多少行，实际多少字多少行
-  console.log("[DraftDepot] Markdown 没能写进 CSDN 编辑区，期望", text.replace(/\s/g, "").length,
-    "字", text.split("\n").filter((line) => line.trim()).length, "行；实际",
-    stripSpace(currentText(el)).length, "字", lineCount(el), "行");
+  // 留一条够看懂的日志：期望多少字多少换行，实际多少；再把两边的开头贴出来，看它接成了什么样
+  console.log("[DraftDepot] Markdown 没能写进 CSDN 编辑区，期望", stripSpace(text).length, "字",
+    normalizeText(text).split("\n").length, "行；实际", stripSpace(currentText(el)).length, "字",
+    lineCount(el), "个换行；编辑区源码开头", JSON.stringify(currentText(el).slice(0, 80)),
+    "；原文开头", JSON.stringify(text.slice(0, 80)));
   return false;
 }
 

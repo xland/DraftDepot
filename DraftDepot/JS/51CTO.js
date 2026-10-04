@@ -26,6 +26,11 @@ const EDIT_PAGE_PREFIX = "/blogger/publish";
 
 const CHECK_INTERVAL = 600;
 
+/** 写完停一拍再复核：给页面自己那一轮重渲染留足时间（见 fillTitle） */
+const TITLE_SETTLE = 400;
+
+let filled = false; // 本文档已经灌过一轮：页面自身的后续刷新不该再糊一遍
+
 // —— 图片 ——
 // 三步：getUploadSign 拿签名 → getUploadConfig 拿 COS 的上传参数（含目标 key）→ 把文件 POST 到 COS。
 // 两步凭证请求都是 form-urlencoded，身份在 cookie 里（同源请求默认就带上）。
@@ -50,12 +55,36 @@ function getTextArea() {
  * 写一个输入框（标题是 input、正文是 textarea，两个都走这里）。
  * 页面是 Vue2（那些下拉框是 Element UI 的 el-input__inner），标题与正文虽不是 Element 组件，
  * 但一样是受控的：直接写 el.value 它收不到——只有原型上的原生 setter 能真正写进去，
- * 补一次 input 事件它才当成"用户敲进去的"：字数统计、预览、自动保存都挂在 input 上
+ * 补一次 input 事件它才当成"用户敲进去的"：字数统计、预览、自动保存都挂在 input 上。
+ * change 也补发一份：万一它被绑成 v-model.lazy（失焦才认），只发 input 是收不到的
  */
 function setValue(el, text) {
   const proto = el.tagName === "TEXTAREA" ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
   Object.getOwnPropertyDescriptor(proto, "value").set.call(el, text);
   el.dispatchEvent(new Event("input", { bubbles: true }));
+  el.dispatchEvent(new Event("change", { bubbles: true }));
+}
+
+/** 等一会儿：Promise 版的 setTimeout，好跟 await 串起来 */
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/**
+ * 写标题：写了还得回头复核，不看这一眼，正文一进来它就白写了。
+ * 编辑页是 Vue2（还在服务端就把 HTML 吐出来了）：脚本见到标题框的时候，Vue 未必已经接管它——
+ * 那时写的 value 与那一记 input 都没人听，data.title 依旧是空串，随后任何一次渲染都会按这个值
+ * 把框刷回空。偏偏紧随其后的"写正文"必定带起一次渲染（重算预览、重数字数、自动存草稿），
+ * 于是标题总在正文之后不见。
+ * 补写没有副作用（标题不长、也不是累加），所以最多试三回；都不成就认了，由调用方的日志收场
+ */
+async function fillTitle(el, text) {
+  for (let attempt = 0; attempt < 3; attempt++) {
+    if (el.value === text) return true; // 还在，不必动
+    setValue(el, text);
+    await sleep(TITLE_SETTLE);
+  }
+  return el.value === text;
 }
 
 /** 两个凭证请求：form-urlencoded 发过去，回包是 { code, data } */
@@ -107,17 +136,25 @@ const timer = setInterval(async () => {
   const textArea = getTextArea();
   if (!titleInput || !textArea) return;
   clearInterval(timer); // 取到就停表：一个文档只灌一次
+  if (filled) return;
+  filled = true;
 
   const article = await DDMsg.invoke("getArticle");
   // 两份都空 = 这一轮早给过了（页面刷新/跳转会让本脚本整个重跑），或这篇本来就没内容：都别动手
   if (!article || (!article.title && !article.html)) return;
+  // 认出拿的是哪个框：万一页面上另有一份同 id 的占位元素，一眼就看得出来
+  console.log("[DraftDepot] 51CTO 标题框：", titleInput.tagName,
+    JSON.stringify(titleInput.getAttribute("placeholder")));
 
   // 灌标题正文这一整段都盖着遮罩：那期间页面是半截的，别让人插手（见 Mask.js）
   await DDMask.withMask(async () => {
-    if (article.title) setValue(titleInput, article.title);
+    let titled = true;
+    if (article.title) titled = await fillTitle(titleInput, article.title);
     // 字段叫 html，这一趟装的其实是 Markdown（见文件头）：图先传上去换成图床地址再灌进去。
     // 写完它自己会渲染预览、数"共多少字"，也会自动保存草稿——那是它自己的事
     if (article.html) setValue(textArea, await DDImages.uploadMarkdownImages(article.html, uploadImage));
+    // 写正文必定带起一次渲染（见 fillTitle 的说明），所以正文之后标题还得再看一眼
+    if (titled) await fillTitle(titleInput, article.title);
   });
-  console.log("[DraftDepot] 文章已灌入 51CTO 编辑器");
+  console.log("[DraftDepot] 文章已灌入 51CTO 编辑器，标题", titleInput.value ? "在位" : "没留住");
 }, CHECK_INTERVAL);
