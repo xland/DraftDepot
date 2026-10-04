@@ -10,7 +10,7 @@
 //
 // 图片是唯一要额外跑一趟的事：正文里的图是 https://app.localhost/images/<文件名>（本程序 WebView2
 // 的虚拟映射，OSC 的服务器取不到），得按文件名从本机图片目录取文件、传它的图床，拿到地址换掉
-// Markdown 里的图片地址再灌进去。取文件与"这张图传过没有"由 Msg.js 管（DDMsg.imageUrl），
+// Markdown 里的图片地址再灌进去。取文件、传图床、换地址这套全由 Images.js 管（DDImages.uploadMarkdownImages），
 // 这里只留 OSC 自己的上传接口 uploadImage。目录句柄只能由 native 给：脚本跑在网页上下文里，
 // 碰不到本机文件系统，光有路径也造不出 File 对象。
 
@@ -49,12 +49,6 @@ function setValue(el, text) {
   el.dispatchEvent(new Event("input", { bubbles: true }));
 }
 
-/** 正文里的图：https://app.localhost/images/<文件名>；不是这个前缀的（外链图）抓不到 */
-const IMAGE_URL_PREFIX = "https://app.localhost/images/";
-
-/** 抓 Markdown 里的图片地址：![](https://app.localhost/images/xxx.png) → 文件名那一截 */
-const IMAGE_URL_PATTERN = /https:\/\/app\.localhost\/images\/([^)\s"']+)/g;
-
 /**
  * 上传一张图，拿到它的图床地址。
  * 表单就一个 file 字段（二进制）；返回 JSON 的 result 是地址（success 为 true 才算成）。
@@ -82,29 +76,6 @@ function uploadImage(file) {
   });
 }
 
-/**
- * 把 Markdown 里的图全部换成图床地址：取文件与"这张图传过没有"由 Msg.js 管（DDMsg.imageUrl），
- * 这里只管按名字把拿到的地址换回 Markdown 里。
- * 外链图抓不到文件名，原样留着。串行一张张来：图一般不多，省得并发把它限流了。
- * 某张失败就保留原地址——多半是裂图，但不该为一张图把整篇都拦下
- */
-async function uploadImages(text) {
-  if (!text.includes(IMAGE_URL_PREFIX)) return text;
-  // 同一张图可能在正文里出现多次：去重，只处理一次
-  const names = [...new Set([...text.matchAll(IMAGE_URL_PATTERN)].map((matched) => matched[1]))];
-  let result = text;
-  for (const name of names) {
-    // 传过就直接用旧地址，没传过才取文件传一次（见 Msg.js 的 imageUrl）
-    const url = await DDMsg.imageUrl(name, uploadImage).catch((err) => {
-      console.log("[DraftDepot] 图片上传失败", name, err);
-      return "";
-    });
-    if (!url) continue;
-    result = result.split(IMAGE_URL_PREFIX + name).join(url);
-  }
-  return result;
-}
-
 const timer = setInterval(async () => {
   // 只在顶层文档干活：注入脚本每个 iframe 也会跑一遍，别钻到别人的框里去做判断
   if (window.self !== window.top) return;
@@ -122,11 +93,11 @@ const timer = setInterval(async () => {
   // 两份都空 = 这一轮早给过了（页面刷新/跳转会让本脚本整个重跑），或这篇本来就没内容：都别动手
   if (!article || (!article.title && !article.html)) return;
 
-  // 传图 + 灌标题正文这一整段都盖着遮罩：那期间页面是半截的，别让人插手（见 Msg.js）
-  await DDMsg.withMask(async () => {
+  // 传图 + 灌标题正文这一整段都盖着遮罩：那期间页面是半截的，别让人插手（见 Mask.js）
+  await DDMask.withMask(async () => {
     if (article.title) setValue(titleInput, article.title);
     // 图先传上去换成图床地址，再把 Markdown 写进编辑器（见文件头说明）
-    if (article.html) setValue(contentBox, await uploadImages(article.html));
+    if (article.html) setValue(contentBox, await DDImages.uploadMarkdownImages(article.html, uploadImage));
   });
   console.log("[DraftDepot] 文章已灌入 OSC 编辑器");
 }, CHECK_INTERVAL);

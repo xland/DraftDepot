@@ -1,3 +1,5 @@
+#include <unordered_map>
+
 #include "Env.h"
 #include "PageSite.h"
 #include "WindowSite.h"
@@ -5,9 +7,49 @@
 #include "Util.h"
 #include <winrt/Windows.Foundation.Collections.h> // 提供 IMap::HasKey 的定义，避免 C3779
 
-PageSite::PageSite(WindowSite* win, ComPtr<ICoreWebView2>& webview, const std::wstring& url)
-	: win{ win }, webview{ webview }, url{ url }
+namespace
 {
+	/// 各平台的落地首页：没有可用 token（或该平台还没做"直奔编辑页"）时打开这里，让用户自己登录。
+	/// 落地页与注入脚本（injectSiteScript 按同一个 type 取 <type>.js）是同一件事的两半：
+	/// 开哪个页面，就决定了那里等着的是哪份脚本。所以两条都放在本文件里，
+	/// 加平台时顺着一处改完，不会登记了脚本却漏了落地页
+	const std::unordered_map<std::wstring, std::wstring> siteHome = {
+		{ L"WeiXin", L"https://mp.weixin.qq.com/" },
+		// 知乎：直接给写文章的页面。没登录会被它送到登录页，登录成功后又自动回到这个地址，
+		// 所以不需要像微信那样拿 token 拼编辑页（注入脚本 JS/ZhiHu.js 在编辑页里等文章灌入）
+		{ L"ZhiHu",  L"https://zhuanlan.zhihu.com/write" },
+		// CSDN：给 Markdown 编辑器那条写作页（左边源码右边预览），而不是 mp.csdn.net 的富文本编辑器。
+		// ?not_checkout=1 是它"新建文章"的入口，不带会被落到"接着编上一篇草稿"上。
+		// 选 Markdown 那条是因为代码块：写成围栏 + 语言，语言本来就在围栏上，而富文本那条得把代码块
+		// 拼成 CKEditor 的 codesnippet 组件，还得随文带一份着色，代价大且容易失效（详见 JS/CSDN.js
+		// 文件头）。没登录会被它送到登录页，登录成功后又自动回到这个地址（注入脚本在写作页里等）
+		{ L"CSDN",   L"https://editor.csdn.net/md/?not_checkout=1" },
+		// 博客园：直接给写文章的页面，没登录会被它送到登录页，登录成功后又自动回来（与知乎同一套）
+		{ L"CnBlogs", L"https://i.cnblogs.com/posts/edit" },
+		// 开源中国：直接给写文章的页面（AI 写作页），没登录会被它送到登录页，登录成功后又自动回来。
+		// 地址里的 u/1432189 是账号 id，换账号登录要同步改这里（脚本那边只认 /blog/ai-write 结尾）
+		{ L"OSC",    L"https://my.oschina.net/u/1432189/blog/ai-write" },
+	// 掘金：直接给新建草稿的页面，没登录会被它送到登录页，登录成功后又自动回来（与知乎同一套）
+	{ L"JueJin", L"https://juejin.cn/editor/drafts/new?v=2" },
+	// InfoQ：给草稿箱。它没有固定的"新建文章"地址（编辑页是 /draft/<id>，id 要建草稿时才给），
+	// 所以由注入脚本在草稿箱上调建草稿接口拿到 id 再跳过去（见 JS/InfoQ.js）
+	{ L"InfoQ",  L"https://xie.infoq.cn/draftbox" },
+	// 51CTO：直接给发布文章的页面（Markdown 编辑器），没登录会被它送到登录页，登录成功后又自动回来
+	{ L"51CTO",  L"https://blog.51cto.com/blogger/publish" },
+	// 阿里云开发者社区：直接给新建文章的页面（Markdown 编辑器），没登录会被它送到登录页，
+	// 登录成功后又自动回来（与知乎同一套）
+	{ L"AliYun", L"https://developer.aliyun.com/article/new#/" },
+	};
+}
+
+PageSite::PageSite(WindowSite* win, ComPtr<ICoreWebView2>& webview)
+	: win{ win }, webview{ webview }
+{
+	// 起始 URL 由本类按窗口的 type + 该站点存下来的配置算出来（见 buildStartUrl）。
+	// 放在函数体里算而不是成员初始化列表：它要读 win->type / win->config，写进列表就等于把正确性
+	// 押在成员的声明顺序上（win 必须排在头一个）。这里没那个必要，函数体里一目了然
+	startUrl = buildStartUrl();
+
 	auto msgReceivedCB = Callback<ICoreWebView2WebMessageReceivedEventHandler>(this, &PageSite::onMsgReceived);
 	webview->add_WebMessageReceived(msgReceivedCB.Get(), nullptr);
 
@@ -19,11 +61,35 @@ PageSite::PageSite(WindowSite* win, ComPtr<ICoreWebView2>& webview, const std::w
 
 	// 脚本要在首屏文档创建时就跑起来，所以先注册再导航
 	injectSiteScript(webview);
-	webview->Navigate(url.c_str());
+	webview->Navigate(startUrl.c_str());
 }
 
 PageSite::~PageSite()
 {
+}
+
+std::wstring PageSite::buildStartUrl()
+{
+	// 只有微信会临时拼 URL：它有 token 就直接进"新建图文"的编辑页，省得用户自己再点一次。
+	// config 是窗口加载的那一份（脚本调 setParam 回传 token 时同步更新），但本函数只在建 PageSite
+	// 时跑这一遍——那时拿到的就是库里现成的 token，拿不到就照旧落首页让用户登录
+	if (win->type == L"WeiXin")
+	{
+		if (win->config.HasKey(L"token"))
+		{
+			std::wstring token{ win->config.GetNamedString(L"token") };
+			if (!token.empty())
+				return std::wstring{ L"https://mp.weixin.qq.com/cgi-bin/appmsg?t=media/appmsg_edit_v2" }
+					+ L"&action=edit&isNew=1&type=77&createType=0&token=" + token
+					+ L"&lang=zh_CN&timestamp=" + std::to_wstring(Util::nowMillis());
+		}
+		// 没 token（或 token 是空串）：只能开首页让用户登录，登录后由注入脚本把新 token 带回来
+		return siteHome.at(L"WeiXin");
+	}
+
+	// 其他平台：落在各自的落地页上；没登记过的 type 返回空串（Navigate 到空串等于不导航）
+	auto it = siteHome.find(win->type);
+	return it == siteHome.end() ? std::wstring{} : it->second;
 }
 
 HRESULT PageSite::onMsgReceived(ICoreWebView2* webview, ICoreWebView2WebMessageReceivedEventArgs* args)
@@ -126,7 +192,8 @@ void PageSite::handleGetCookie(JsonObject& param, JsonObject& result)
 	JsonObject args = Util::msgArgs(param);
 
 	// 取哪个源的 cookie：不给就用本窗口打开的那个地址——站点脚本要的通常就是自己这一个
-	std::wstring target = url;
+	// （startUrl 是开窗时的起始地址，页面跳转后不跟着变；够用，脚本要读的都是自己站点的 cookie）
+	std::wstring target = startUrl;
 	std::wstring givenUrl = Util::argString(args, L"url");
 	if (!givenUrl.empty()) target = givenUrl;
 
@@ -262,12 +329,21 @@ void PageSite::injectSiteScript(ComPtr<ICoreWebView2>& webview)
 	auto [siteData, siteSize] = Util::getRes(win->type + L".js");
 	if (!siteData || siteSize == 0) return;
 
-	// 拼在站点脚本前面的 Msg.js 提供 window.DDMsg：站点脚本直接用它跟 native 说话，
-	// 不用各自再写一遍 postMessage / 回包配对
-	auto [msgData, msgSize] = Util::getRes(L"Msg.js");
+	// 拼在站点脚本前面的公共脚本，顺序即依赖顺序（脚本直接取 window 上的那个对象用）：
+	//   Msg.js     → window.DDMsg：跟 native 说话，不用各自再写一遍 postMessage / 回包配对
+	//   Content.js → window.DDContent：收拾正文形态用到的共用工具（代码语言表、代码块遍历、HTML 解析）
+	//   Images.js  → window.DDImages：取图片文件、传图床、把图床地址换回正文（要用上 DDMsg / DDContent）
+	//   Mask.js    → window.DDMask：同步期间的整页遮罩与提示
+	// 各家不同的加工（微信的段落摊平、知乎的代码块标语言…）留在各自的站点脚本里
 	std::string scriptUtf8;
-	if (msgData && msgSize > 0) scriptUtf8.append(static_cast<const char*>(msgData), msgSize);
-	// 换行 + 分号隔开两段：免得上一段末尾的行注释把下一段开头吞掉
+	for (const wchar_t* name : { L"Msg.js", L"Content.js", L"Images.js", L"Mask.js" })
+	{
+		auto [data, size] = Util::getRes(name);
+		if (!data || size == 0) continue;
+		// 换行 + 分号隔开两段：免得上一段末尾的行注释把下一段开头吞掉
+		if (!scriptUtf8.empty()) scriptUtf8 += "\n;\n";
+		scriptUtf8.append(static_cast<const char*>(data), size);
+	}
 	scriptUtf8 += "\n;\n";
 	scriptUtf8.append(static_cast<const char*>(siteData), siteSize);
 

@@ -3,9 +3,6 @@ import html from "./EditorTitle.html?raw";
 import CtrlBase from "../CtrlBase";
 import Msg from "../Msg";
 import EditorContent from "../EditorContent/EditorContent";
-import forWeiXin from "../EditorContent/WeiXinHtml";
-import forZhiHu from "../EditorContent/ZhiHuHtml";
-import forCSDN from "../EditorContent/CSDNHtml";
 import toMarkdown from "../EditorContent/Markdown";
 
 /**
@@ -26,28 +23,29 @@ const publishTargets = [
 ];
 
 /**
- * 各平台要的正文形态：type → 转换函数（不登记的先原样给）。
- * 微信要整段摊平成它自己的段落结构、着色靠 shiki 内联色；知乎反过来——只标代码块语言，
- * 样式一概不塞（它只认自己的语义结构，见 ZhiHuHtml）；CSDN 与知乎同一套（见 CSDNHtml）。
- * 开源中国与博客园、掘金都是 Markdown 编辑器，所以它们不是"另一种 HTML"，而是整篇转 Markdown
- * （见 Markdown）；InfoQ 也是给 Markdown——但它是富文本编辑器，由站点脚本把整篇 Markdown 做成
+ * 富文本站点的正文改造都在对方页面上做。
+ * 默认就给编辑器里的原始正文，站点脚本（JS/<站点>.js）在对方编辑页里按需收拾成那一站点要的形态：
+ * 微信整段摊平成它自己的段落结构（JS/WeiXin.js 的 forWeiXin）、知乎给代码块标 Prism 的语言类名
+ * （JS/ZhiHu.js 的 forZhiHu）。图片一律由站点脚本在对方编辑页里传图床（见各 JS/*.js）。
+ * 加站点默认什么都不用登记。
+ *
+ * 例外是这几家 Markdown 编辑器：它们收的是 Markdown 文本而不是 HTML，所以整篇先在这里转一次
+ * （见 Markdown）；InfoQ 虽然也是给 Markdown，但它是富文本编辑器，由站点脚本把整篇 Markdown 做成
  * .md 文件交给它自己的"导入 Markdown"，这样代码块的语言标识才不会丢（见 JS/InfoQ.js）。
- * 图片都由站点脚本在对方编辑页里传图床（见 JS/WeiXin.js、JS/ZhiHu.js、JS/CSDN.js、JS/OSC.js、
- * JS/CnBlogs.js、JS/JueJin.js、JS/InfoQ.js、JS/51CTO.js、JS/AliYun.js）。
  */
-const forSite: Record<string, (html: string) => Promise<string> | string> = {
-  WeiXin: forWeiXin,
-  ZhiHu: forZhiHu,
-  CSDN: forCSDN,
-  OSC: toMarkdown,
-  CnBlogs: toMarkdown,
-  JueJin: toMarkdown,
-  InfoQ: toMarkdown,
-  // 键要加引号：以数字开头的标识符不合法（站点 type 本身仍是字符串 "51CTO"）
-  "51CTO": toMarkdown,
-  // 阿里云开发者社区：写文章页是 Markdown 源码编辑器（左边源码右边预览），给 Markdown
-  AliYun: toMarkdown,
-};
+const markdownSites = new Set([
+  // CSDN / 开源中国 / 博客园 / 掘金：写作页就是 Markdown 编辑器，直接给 Markdown
+  "CSDN",
+  "OSC",
+  "CnBlogs",
+  "JueJin",
+  // InfoQ：给 Markdown，但入口是它自己的"导入 Markdown"文件（见 JS/InfoQ.js）
+  "InfoQ",
+  // 键引号：以数字开头的标识符不合法（站点 type 本身仍是字符串 "51CTO"）
+  "51CTO",
+  // 阿里云开发者社区：写文章页是 Markdown 源码编辑器（左边源码右边预览）
+  "AliYun",
+]);
 
 /**
  * 编辑器顶部的文章标题栏（模块单例）。
@@ -74,16 +72,17 @@ class EditorTitle extends CtrlBase {
     // 用 title 属性精确锁定按钮，避免依赖 HTML 里 8 个 .publishBtn 的顺序
     for (const target of publishTargets) {
       const btn = this.dom.querySelector<HTMLElement>(`.publishBtn[title="${target.title}"]`);
-      // 转换可能是异步的（转 Markdown 那份要读数据目录），所以这里一律 await
+      // 只有 Markdown 站点要在这里转一手（见 markdownSites），其余站点的改造都在对方页面上做。
+      // 转 Markdown 是同步的，这里一律 await 是为了将来换异步实现不用改调用处
       btn.addEventListener("click", async () => {
         const content = EditorContent.content;
         // 连同当前标题与正文一起交给 native：site 窗口里的脚本（如 WeiXin.js）进到对方编辑器后会来取。
-        // 两个窗口是各自独立的 WebView2，互相看不见，内容只能靠 native 中转
-        const convert = forSite[target.type];
+        // 两个窗口是各自独立的 WebView2，互相看不见，内容只能靠 native 中转。
+        // 大多数站点给原始正文，形态收拾由对方页面上的站点脚本做（见 markdownSites 的说明）
         Msg.invoke("openSite", {
           type: target.type,
           title: this.input.value,
-          html: convert ? await convert(content) : content,
+          html: markdownSites.has(target.type) ? await toMarkdown(content) : content,
         });
       });
     }

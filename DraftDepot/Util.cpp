@@ -1,5 +1,7 @@
 #include "Util.h"
 
+#include <chrono>
+
 std::wstring Util::convertToWStr(const char* str)
 {
     if (!str) return std::wstring();
@@ -42,4 +44,9 @@ sqlite3_int64 Util::argNumber(const JsonObject& args, const wchar_t* key)
     return value.ValueType() == JsonValueType::Number
         ? static_cast<sqlite3_int64>(value.GetNumber())
         : Util::NO_NUMBER;
+}
+long long Util::nowMillis()
+{
+    return std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::system_clock::now().time_since_epoch()).count();
 }

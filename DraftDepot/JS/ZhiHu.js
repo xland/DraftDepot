@@ -1,16 +1,20 @@
 // 由 PageSite::injectSiteScript 注入到 zhuanlan.zhihu.com，每个文档（含跳转后）都会跑一遍。
-// 注入时前面拼了 Msg.js，所以直接用它挂的 window.DDMsg 跟 native 说话。
-// 职责：进了文章编辑页就把"待发布的文章"（点发布按钮时由主编辑器交给 native 的）灌进知乎编辑器。
+// 注入时前面拼了 Msg.js（window.DDMsg，跟 native 说话）与 Content.js（window.DDContent，
+// 收拾正文形态的共用工具），所以站点脚本里直接用它们，不用各自再写一遍 IPC 与语言判定。
+// 职责：
+//   1. 把原始正文收拾成知乎编辑器认的那一版（见文末的 forZhiHu）：只是给代码块标语言，其余原样、
+//      样式一样也不加——它的编辑页是 Draft.js，HTML 进去还要过它自己的处理器重排；
+//   2. 进了文章编辑页就把收拾好的正文（连同标题）灌进知乎编辑器。
 //
 // 登录这件事不用脚本操心：没登录时打开 /write 会被知乎自动送到登录页，登录成功后又被自动送回
 // /write ——那是另一次导航、另一个文档，本脚本会重新跑一遍。所以这里只认编辑页、只干灌入。
 //
 // 图片是唯一要额外跑一趟的事：正文里的图是 https://app.localhost/images/<文件名>（本程序 WebView2
 // 的虚拟映射，知乎服务器取不到），得按文件名从本机图片目录取文件、传它的图床，拿到地址换掉正文里的
-// src 再灌进去。取文件 + 传图床 + 换地址这套四个站点一模一样，收在 Msg.js 里共用一份
-// （DDMsg.uploadImages），这里只留知乎自己的上传接口 uploadImage。
+// src 再灌进去。取文件 + 传图床 + 换地址这套四个站点一模一样，收在 Images.js 里共用一份
+// （DDImages.uploadImages），这里只留知乎自己的上传接口 uploadImage。
 // 目录句柄只能由 native 给：脚本跑在网页上下文里，碰不到本机文件系统，光有路径也造不出 File 对象。
-// 传过的图不再重复传：地址记在 image_site 表里，下次直接取（见 Msg.js 的 imageUrl）。
+// 传过的图不再重复传：地址记在 image_site 表里，下次直接取（见 Images.js 的 imageUrl）。
 
 // 文章编辑页：新草稿是 /write；知乎给草稿存盘后会把地址改成 /p/<id>/edit，两个都得认。
 // 认这两个而不是"只要 hostname 是 zhuanlan 就干"，是为了避开文章页底下的评论框——它也是 DraftEditor
@@ -70,7 +74,7 @@ function setContent(editor, html) {
   editor.dispatchEvent(ev);
 }
 
-/** 上传一张图，拿到它的图床地址（返回 JSON 里的 src）；取文件与"传过没有"由 Msg.js 管 */
+/** 上传一张图，拿到它的图床地址（返回 JSON 里的 src）；取文件与"传过没有"由 Images.js 管 */
 function uploadImage(file) {
   return new Promise((resolve, reject) => {
     const form = new FormData();
@@ -95,6 +99,29 @@ function uploadImage(file) {
   });
 }
 
+// —— 正文形态适配 ——
+// 主编辑器给过来的是编辑器里的原始正文（roosterjs 的产物，代码块是 <pre><code data-lang="x">纯文本</code></pre>），
+// 这里只做一件事：给代码块标语言。
+//   data-lang 是我们自己的标记，知乎不认；它按 Prism 的类名认语言，所以补一个 language-* 上去，
+//   data-lang 随后去掉——这份 HTML 是给知乎的，留着我们的自定义属性没有用处。
+//   认不出语言的代码块原样留着（知乎会当成没标语言的代码块）。
+//
+// 样式一概不碰：知乎的编辑器是 Draft.js（受控组件），粘贴过来的 HTML 先过它自己的处理器——<pre> 被收成
+// 它的代码块 block、只留纯文本，随后由它的 Prism 重新着色，我们自己塞的底色与内联色一个不剩；提交时
+// 服务端还会再清洗一遍，编辑期侥幸留在 DOM 上的样式同样留不到最终页面。
+// 结论：这条链路能带过去的只有"它的语义结构"（p / h2 / blockquote / ul / b / 代码块…），没有自定义 CSS，
+// 着色与排版交给它。微信那条链路正好相反——它不吃 class 只吃内联 style，见 JS/WeiXin.js。
+
+/** 原始正文 → 知乎编辑器认的那一版（只给代码块标语言） */
+function forZhiHu(html) {
+  const root = DDContent.parse(html);
+  DDContent.eachCode(root, function (codeEl, lang) {
+    codeEl.classList.add("language-" + lang);
+    codeEl.removeAttribute("data-lang");
+  });
+  return root.innerHTML;
+}
+
 const timer = setInterval(async () => {
   // 只在顶层文档干活：注入脚本每个 iframe 也会跑一遍，别钻到别人的框里去做判断
   if (window.self !== window.top) return;
@@ -113,13 +140,13 @@ const timer = setInterval(async () => {
   // 两份都空 = 这一轮早给过了（页面刷新/跳转会让本脚本整个重跑），或这篇本来就没内容：都别动手
   if (!article || (!article.title && !article.html)) return;
 
-  // 传图 + 灌标题正文这一整段都盖着遮罩：那期间页面是半截的，别让人插手（见 Msg.js）
-  await DDMsg.withMask(async () => {
+  // 传图 + 灌标题正文这一整段都盖着遮罩：那期间页面是半截的，别让人插手（见 Mask.js）
+  await DDMask.withMask(async () => {
     const titleInput = getTitleInput();
     if (article.title && titleInput) setTitle(titleInput, article.title);
-    // 图先换成图床地址（传过的直接取旧地址，见 Msg.js），再整篇灌进去；
-    // 代码块只标了语言，着色由知乎自己做
-    if (article.html) setContent(editor, await DDMsg.uploadImages(article.html, uploadImage));
+    // 先收拾形态：代码块标上语言（见 forZhiHu）；图再换成图床地址（传过的直接取旧地址，见 Msg.js），
+    // 最后整篇灌进去——之后就全是知乎自己的事了，着色与排版由它的 Prism 重做
+    if (article.html) setContent(editor, await DDImages.uploadImages(forZhiHu(article.html), uploadImage));
   });
   console.log("[DraftDepot] 文章已灌入知乎编辑器");
 }, CHECK_INTERVAL);

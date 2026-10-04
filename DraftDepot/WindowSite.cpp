@@ -4,45 +4,6 @@
 #include "Util.h"
 #include "Db/Site.h"
 
-#include <chrono>
-
-namespace
-{
-	/// 各平台的落地首页：没有可用 token（或该平台还没做"直奔编辑页"）时打开这里，让用户自己登录
-	const std::unordered_map<std::wstring, std::wstring> siteHome = {
-		{ L"WeiXin", L"https://mp.weixin.qq.com/" },
-		// 知乎 / CSDN：直接给写文章的页面。没登录会被它送到登录页，登录成功后又自动回到这个地址，
-		// 所以不需要像微信那样拿 token 拼编辑页（两个站点的注入脚本在编辑页里等文章灌入）
-		{ L"ZhiHu",  L"https://zhuanlan.zhihu.com/write" },
-		{ L"CSDN",   L"https://mp.csdn.net/mp_blog/creation/editor" },
-		// 博客园：直接给写文章的页面，没登录会被它送到登录页，登录成功后又自动回来（与知乎同一套）
-		{ L"CnBlogs", L"https://i.cnblogs.com/posts/edit" },
-		// 开源中国：直接给写文章的页面（AI 写作页），没登录会被它送到登录页，登录成功后又自动回来。
-		// 地址里的 u/1432189 是账号 id，换账号登录要同步改这里（脚本那边只认 /blog/ai-write 结尾）
-		{ L"OSC",    L"https://my.oschina.net/u/1432189/blog/ai-write" },
-	// 掘金：直接给新建草稿的页面，没登录会被它送到登录页，登录成功后又自动回来（与知乎同一套）
-	{ L"JueJin", L"https://juejin.cn/editor/drafts/new?v=2" },
-	// InfoQ：给草稿箱。它没有固定的"新建文章"地址（编辑页是 /draft/<id>，id 要建草稿时才给），
-	// 所以由注入脚本在草稿箱上调建草稿接口拿到 id 再跳过去（见 JS/InfoQ.js）
-	{ L"InfoQ",  L"https://xie.infoq.cn/draftbox" },
-	// 51CTO：直接给发布文章的页面（Markdown 编辑器），没登录会被它送到登录页，
-	// 登录成功后又自动回来（与知乎同一套）
-	{ L"51CTO",  L"https://blog.51cto.com/blogger/publish" },
-	// 阿里云开发者社区：直接给新建文章的页面（Markdown 编辑器），没登录会被它送到登录页，
-	// 登录成功后又自动回来（与知乎同一套）
-	{ L"AliYun", L"https://developer.aliyun.com/article/new#/" },
-	};
-
-	/// 与 JS 的 Date.now() 同口径：Unix 纪元起的毫秒数，URL 里的 timestamp 要 13 位
-	std::wstring nowMillis()
-	{
-		auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
-			std::chrono::system_clock::now().time_since_epoch()).count();
-		return std::to_wstring(ms);
-	}
-
-}
-
 /// site 窗口的全局注册表。关 site 窗口不影响主进程；主进程退出由主 Window::onDestroy 触发。
 std::unordered_map<HWND, std::unique_ptr<WindowSite>> windowsSite;
 
@@ -178,33 +139,11 @@ HRESULT WindowSite::onCtrlReady(HRESULT result, ICoreWebView2Controller* ctrl)
 	RECT bounds;
 	GetClientRect(hwnd, &bounds);
 	ctrl->put_Bounds(bounds);
-	// 站点脚本由 PageSite 注入（它要在自己 Navigate 之前注册，才能赶上首屏文档）
-	page = std::make_unique<PageSite>(this, webview, buildStartUrl());
+	// 起始 URL 由 PageSite 自己算（见它的 buildStartUrl）：本类不再掺和站点的事——
+	// 它要知道的只有 type 与配置，而那两样它都能从本窗口读到
+	page = std::make_unique<PageSite>(this, webview);
 	return S_OK;
 }
-
-std::wstring WindowSite::buildStartUrl()
-{
-	if (type == L"WeiXin")
-	{
-		// 库里有 token 就直奔"新建图文"的编辑页；timestamp 用当前毫秒，避免拿到缓存页
-		if (config.HasKey(L"token"))
-		{
-			std::wstring token{ config.GetNamedString(L"token") };
-			if (!token.empty())
-				return std::wstring{ L"https://mp.weixin.qq.com/cgi-bin/appmsg?t=media/appmsg_edit_v2" }
-					+ L"&action=edit&isNew=1&type=77&createType=0&token=" + token
-					+ L"&lang=zh_CN&timestamp=" + nowMillis();
-		}
-		// 没 token（或 token 是空串）：只能开首页让用户登录，登录后由注入脚本把新 token 带回来
-		return siteHome.at(L"WeiXin");
-	}
-
-	// 其他平台：先落到各自首页；没登记过的 type 返回空串（PageSite 不会导航）
-	auto it = siteHome.find(type);
-	return it == siteHome.end() ? std::wstring{} : it->second;
-}
-
 
 void WindowSite::onDestroy()
 {

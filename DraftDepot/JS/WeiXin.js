@@ -1,8 +1,11 @@
 // 由 PageSite::injectSiteScript 注入到 mp.weixin.qq.com，每个文档（含跳转后）都会跑一遍。
-// 注入时前面拼了 Msg.js，所以直接用它挂的 window.DDMsg 跟 native 说话。
+// 注入时前面拼了 Msg.js（window.DDMsg，跟 native 说话）与 Content.js（window.DDContent，
+// 收拾正文形态的共用工具），所以站点脚本里直接用它们，不用各自再写一遍 IPC 与语言判定。
 // 职责：
 //   1. 盯住登录态与 token——失效就回登录页，拿到 token 就回传 C++ 存库，并直奔新建图文的编辑页；
-//   2. 进了编辑页就把"待发布的文章"（点发布按钮时由主编辑器交给 native 的）灌进微信编辑器；
+//   2. 把原始正文收拾成微信编辑器认的那一版（见文末的 forWeiXin），再把标题正文一起灌进去。
+//      代码块换 code-snippet 组件那一步还没搬过来——它要用 shiki 着色，注入脚本是资源里的裸 JS，
+//      拿不到着色器，暂时留在 UI/src/EditorContent/WeiXinHtml.ts，见那个文件的说明；
 //   3. 灌完记一个"已发过"的标志（在 native 的发布窗口上）：微信发布成功后会自己跳回首页，
 //      本脚本在每个文档里都要重跑一遍，靠这个标志认出"这是发完之后的跳转"，不再把人拽回编辑页。
 //
@@ -10,9 +13,9 @@
 // 的虚拟映射，微信的服务器取不到）。早先的做法是在主编辑器那边就把图读成 base64 内联进 <img src>，
 // 现在改成跟知乎/CSDN 同一套：按文件名从本机图片目录取文件，走它自己的素材上传接口传到图床，
 // 拿到 cdn_url 换掉正文里的 src 再灌进去。取文件 + 传图床 + 换地址这套四个站点一模一样，收在
-// Msg.js 里共用一份（DDMsg.uploadImages），这里只留微信自己的上传接口 uploadImage。
+// Images.js 里共用一份（DDImages.uploadImages），这里只留微信自己的上传接口 uploadImage。
 // 目录句柄只能由 native 给：脚本跑在网页上下文里，碰不到本机文件系统，光有路径也造不出 File 对象。
-// 传过的图不再重复传：地址记在 image_site 表里，下次直接取（见 Msg.js 的 imageUrl）。
+// 传过的图不再重复传：地址记在 image_site 表里，下次直接取（见 Images.js 的 imageUrl）。
 //
 // 上传接口要的身份参数比别家多：token（地址上有）、ticket 与 svr_time（页面全局变量 wx.* 上有），
 // 再加 cookie 里的 ticket_id —— 它是 HttpOnly，document.cookie 读不到，只能问 native 要
@@ -209,6 +212,212 @@ function setContentByApi(html) {
   return invokeJsApi("mp_editor_set_content", { content: html });
 }
 
+// —— 正文形态适配 ——
+// 主编辑器给过来的是编辑器里的原始正文（roosterjs 的产物），进微信编辑器之前要摊平成它自己的段落结构：
+//   <p style="font-size:14px;line-height:1.75"><span>文字</span><u><span>下划线</span></u></p>
+// 即：块级一律摊平成 p，p 里的每段文本都套一层 span，行内格式（u / s / b / em…）原样留着。
+// 这么转是为了绕开微信那条"行高小于字体大小，多行文本可能重叠"的提示：它按自己的 DOM 结构判版式，
+// 行高偏小（含它给的默认值）就弹。这里每段都显式定死字号与行高，行高用倍数（1.75）而不是 px，
+// 标题在微信里被放大时行高也跟着放大，不会重新跌破字号。
+//
+// 代码块不在这里动：它已经在 UI/src/EditorContent/WeiXinHtml.ts 里换成了微信自己的 code-snippet
+// 结构并着好色——那份要用 shiki 着色，站点脚本是资源里的裸 JS，拿不到着色器。所以见着 pre.code-snippet
+// 整块放行（见 convert 里的注释），别把它当普通 pre 拆一遍。
+// 图片 src 也原样留着 https://app.localhost/images/<文件名>：那是本程序 WebView2 的虚拟映射，
+// 微信的服务器取不到，由下面的 uploadImages 传图床后再换地址。
+
+/** 正文段落字号：定死，不跟着编辑器里的字号走 */
+const FONT_SIZE = "14px";
+
+/** 行高：倍数，明显大于字号 */
+const LINE_HEIGHT = "1.75";
+
+/** 标题字号：沿用编辑器 #editorContent 里的级差（EditorContent.scss），免得落到微信的默认字号上 */
+const HEADING_FONT_SIZE = {
+  H1: "28px",
+  H2: "24px",
+  H3: "20px",
+  H4: "18px",
+  H5: "16px",
+  H6: "15px",
+};
+
+/** 一律转成 p 的标签（编辑器里 roosterjs 出的是 div，微信认 p） */
+const AS_P = new Set(["DIV", "P", "SECTION", "ARTICLE", "ADDRESS", "FIGURE", "FIGCAPTION", "BODY"]);
+
+/** 保留原标签的块级容器：整体结构有意义（列表、引用、表格、代码块） */
+const AS_CONTAINER = new Set(["UL", "OL", "BLOCKQUOTE", "PRE", "TABLE", "TBODY", "THEAD", "TR"]);
+
+/** 保留原标签的块级单元：内容直接放行，不再往里套 p */
+const AS_CELL = new Set(["LI", "TD", "TH"]);
+
+/** 原样保留的元素：图片、换行、分割线，内容与属性都不动 */
+const AS_IS = new Set(["IMG", "BR", "HR"]);
+
+/** 所有块级标签：用来判断哪些节点不能塞进 p 里 */
+const BLOCK_TAGS = new Set([...AS_P, ...AS_CONTAINER, ...AS_CELL, ...Object.keys(HEADING_FONT_SIZE)]);
+
+/**
+ * 清掉外边距：微信自己的段落间距够用，p 上带 margin 会跟它的排版打架。
+ * 长写法（margin-top 之类）也一起清，免得只清了简写留下残余
+ */
+function clearMargin(el) {
+  for (const prop of ["margin", "margin-top", "margin-right", "margin-bottom", "margin-left"]) {
+    el.style.removeProperty(prop);
+  }
+}
+
+function isBlock(node) {
+  return node.nodeType === Node.ELEMENT_NODE && BLOCK_TAGS.has(node.tagName);
+}
+
+/**
+ * CSS 长度 → px 数值；解析不出长度时返回 NaN，兜底由调用方决定。
+ * roosterjs 上报的字号是 pt（15px 对应 "11.25pt"），所以 pt→px 要 ×4/3
+ */
+function cssLengthToPx(length) {
+  const matched = /^(\d+(?:\.\d+)?)\s*(px|pt)$/i.exec((length || "").trim());
+  if (!matched) return NaN;
+  const value = parseFloat(matched[1]);
+  return matched[2].toLowerCase() === "px" ? value : (value * 4) / 3;
+}
+
+/**
+ * 行高折算成"相对字号的倍数"：无单位与 em 直接用，% 除以 100，px 除以该元素字号；
+ * 没写行高 / normal 返回 NaN（按"没定死"处理）
+ */
+function lineHeightRatio(value, fontPx) {
+  const text = value.trim();
+  const num = parseFloat(text);
+  if (!text || text === "normal" || Number.isNaN(num)) return NaN;
+  if (text.endsWith("px")) return num / fontPx;
+  if (text.endsWith("%")) return num / 100;
+  return num;
+}
+
+/** 元素字号（px）：没写 font-size 的按正文默认字号算 */
+function fontSizePx(el, fallback = 14) {
+  const px = cssLengthToPx(el.style.fontSize);
+  return Number.isNaN(px) ? fallback : px;
+}
+
+/** 文本节点：套一层 span，微信的段落就是这么排的；缩进换行产生的纯空白丢掉 */
+function convertText(node) {
+  const text = node.nodeValue || "";
+  if (!text || (!/\S/.test(text) && !text.includes("\u00a0"))) return [];
+  const span = document.createElement("span");
+  span.textContent = text;
+  return [span];
+}
+
+/** 行内元素：标签与样式（颜色 / 粗体 / 字号…）原样留着，只纠正它自己写小的行高 */
+function convertInline(el, children) {
+  const out = el.cloneNode(false);
+  const ratio = lineHeightRatio(out.style.lineHeight, fontSizePx(out));
+  if (!Number.isNaN(ratio) && ratio < Number(LINE_HEIGHT)) out.style.lineHeight = LINE_HEIGHT;
+  children.forEach((child) => out.appendChild(child));
+  return [out];
+}
+
+/** 段落（p 及转成 p 的那些）：定死字号与行高，行内内容留在段内，里头嵌套的块摊平成兄弟段落 */
+function convertParagraph(el, children) {
+  const tag = el.tagName;
+  const block = document.createElement(AS_P.has(tag) ? "p" : tag.toLowerCase());
+  // 原段落的对齐 / 缩进等样式带过去，字号与行高随后压上，保证行高一定大于字号
+  const style = el.getAttribute("style");
+  if (style) block.setAttribute("style", style);
+  clearMargin(block); // 原段落样式里带来的 margin 也一并去掉
+  block.style.fontSize = HEADING_FONT_SIZE[tag] || FONT_SIZE;
+  block.style.lineHeight = LINE_HEIGHT;
+
+  const inline = children.filter((child) => !isBlock(child));
+  const nested = children.filter(isBlock);
+  // 空壳（比如只包了一个内层块）：不留空段落，直接把内层块提上来
+  if (inline.length === 0 && nested.length > 0) return nested;
+  inline.forEach((child) => block.appendChild(child));
+  if (inline.length === 0) block.appendChild(document.createElement("br"));
+  return [block, ...nested];
+}
+
+/** 容器（列表 / 引用 / 表格 / 代码块）：保留标签，子节点原样收下 */
+function convertContainer(el, children) {
+  const out = el.cloneNode(false);
+  // 引用的结构样式（border-left / padding / 缩进）整条去掉，用微信自己的：
+  // 它自带左侧竖线，我们那套叠上去会打架。只补一个底色——不写的话引用会跟正文糊在一起
+  if (out.tagName === "BLOCKQUOTE") {
+    out.removeAttribute("style");
+    out.style.background = "#f6f6f6";
+  }
+  const ratio = lineHeightRatio(out.style.lineHeight, fontSizePx(out));
+  if (!Number.isNaN(ratio) && ratio < Number(LINE_HEIGHT)) out.style.lineHeight = LINE_HEIGHT;
+  for (const child of children) {
+    // 列表里混进来的行内内容补个 li，免得 ul / ol 底下直接挂 span
+    if ((out.tagName === "UL" || out.tagName === "OL") && !isBlock(child)) {
+      const li = document.createElement("li");
+      li.appendChild(child);
+      out.appendChild(li);
+    } else {
+      out.appendChild(child);
+    }
+  }
+  return [out];
+}
+
+/**
+ * 递归转换：返回一组节点。
+ * 块里套块的情况（div 里还有 div）会被摊平成兄弟节点，保证不会生成 p 套 p 这种微信认不出的结构
+ */
+function convert(node) {
+  if (node.nodeType === Node.TEXT_NODE) return convertText(node);
+  if (node.nodeType !== Node.ELEMENT_NODE) return [];
+
+  const el = node;
+  const tag = el.tagName;
+  if (AS_IS.has(tag)) return [el.cloneNode(false)];
+
+  // 代码块：已经是最终进微信的形状（code-snippet 结构 + shiki 内联色，见本节开头），整块原样带过去。
+  // 再往下走就把它当成普通 pre 了——里面每行上的字号与行高会被 convertInline 按正文的那套纠正掉
+  if (tag === "PRE" && el.classList.contains("code-snippet")) return [el.cloneNode(true)];
+
+  const children = Array.from(el.childNodes).flatMap(convert);
+  if (AS_CELL.has(tag)) {
+    const out = el.cloneNode(false);
+    children.forEach((child) => out.appendChild(child));
+    return [out];
+  }
+  if (AS_CONTAINER.has(tag)) return convertContainer(el, children);
+  if (AS_P.has(tag) || HEADING_FONT_SIZE[tag]) return convertParagraph(el, children);
+  return convertInline(el, children);
+}
+
+/** 原始正文 → 微信编辑器认的那一版（段落摊平；代码块与图片不在这里动，见本节开头） */
+function forWeiXin(html) {
+  const doc = new DOMParser().parseFromString(html, "text/html");
+  const root = document.createElement("div");
+
+  // 顶层没有被任何块包住的行内内容（span / 裸文本）补一个 p，别让它直接挂在外面
+  let pending = [];
+  const flush = () => {
+    if (pending.length === 0) return;
+    const p = document.createElement("p");
+    p.style.fontSize = FONT_SIZE;
+    p.style.lineHeight = LINE_HEIGHT;
+    pending.forEach((child) => p.appendChild(child));
+    root.appendChild(p);
+    pending = [];
+  };
+  for (const child of Array.from(doc.body.childNodes).flatMap(convert)) {
+    if (isBlock(child)) {
+      flush();
+      root.appendChild(child);
+    } else {
+      pending.push(child);
+    }
+  }
+  flush();
+  return root.innerHTML;
+}
+
 async function fillArticle(useApi) {
   if (filled) return;
   filled = true;
@@ -219,8 +428,9 @@ async function fillArticle(useApi) {
   // 标题没有对应的 JSAPI（官方只给了正文相关的接口），还是往标题输入框里塞
   const editors = getEditors();
   if (article.title && editors[0]) setTitle(editors[0], article.title);
-  // 图先换成微信图床的地址（传过的直接取旧地址，见 Msg.js），再整篇灌进去
-  const html = await DDMsg.uploadImages(article.html, uploadImage);
+  // 先摊平成微信自己的段落结构（见 forWeiXin），图再换成它的图床地址
+  // （传过的直接取旧地址，见 Msg.js），最后整篇灌进去
+  const html = await DDImages.uploadImages(forWeiXin(article.html), uploadImage);
   if (!html) return;
   if (useApi) await setContentByApi(html);
   else if (editors[1]) setContentByPaste(editors[1], html);
@@ -250,13 +460,13 @@ function waitEditorAndFill() {
       const oldEditor = getEditors().length >= 2;
       if (newEditor) {
         clearInterval(wait);
-        // 传图 + 灌标题正文这一整段都盖着遮罩：那期间页面是半截的，别让人插手（见 Msg.js）
-        await DDMsg.withMask(() => fillArticle(true));
+        // 传图 + 灌标题正文这一整段都盖着遮罩：那期间页面是半截的，别让人插手（见 Mask.js）
+        await DDMask.withMask(() => fillArticle(true));
         await markPublished();
       } else if ((!jsApi || (state && state.isReady)) && oldEditor) {
         // 拿不到 JSAPI（老页面），或它明说了不是新编辑器：按老办法来
         clearInterval(wait);
-        await DDMsg.withMask(() => fillArticle(false));
+        await DDMask.withMask(() => fillArticle(false));
         await markPublished();
       }
     } catch (err) {

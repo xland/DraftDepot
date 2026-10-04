@@ -25,4 +25,7 @@ public:
 	/// 程序图标的资源 id：Resource.rc 里手写的那一行 `100 ICON`（指向 Doc\logo.ico）用的是裸数字，
 	/// 没有符号名，所以在这里记一个。主窗口与 site 窗口的标题栏、任务栏都挂它（见各自的 createWin）
 	static constexpr int appIconId = 100;
+	/// 当前时刻的毫秒数，与 JS 的 Date.now() 同口径（Unix 纪元起）。
+	/// 拼 URL 时要带上它：带着才是"这一刻"的请求，不然页面或接口可能给回缓存的那一份
+	static long long nowMillis();
 };

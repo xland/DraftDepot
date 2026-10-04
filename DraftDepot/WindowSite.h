@@ -10,7 +10,6 @@ class PageSite;
  *     不像主窗口 WS_POPUP 自绘。
  *   - 业务：主 Page 承载产品功能，PageSite 只负责显示网页 + 暴露 IPC 桥。
  * 模块单例：在主 Page::onMsgReceived 收到 openSite IPC 时由 WindowSite::create(type) 创建，
- * 起始 URL 不再由前端传，由本类按 type + config 自己算（见 buildStartUrl）。
  * 生命周期：
  *   - 自有全局 map windowsSite 跟踪，区别于主窗口的 windows（site 窗口关闭不影响主进程退出）；
  *   - 关窗时 WebView2 自动清理 webview，PageSite 由 unique_ptr 持有。
@@ -64,9 +63,7 @@ private:
 	static LRESULT CALLBACK winMsg(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam);
 	void createWin();
 	HRESULT onCtrlReady(HRESULT result, ICoreWebView2Controller* ctrl);
-	/// 按 type + config 算出起始 URL：微信有 token 就直接进新建图文的编辑页，没有就落首页去登录；
-	/// 其他平台暂用各自的落地首页；没登记过的 type 返回空串
-	std::wstring buildStartUrl();
+	/// 开哪个页面不由本类操心：交给 PageSite，见它的 buildStartUrl
 	void onDestroy();
 private:
 	std::unique_ptr<PageSite> page;

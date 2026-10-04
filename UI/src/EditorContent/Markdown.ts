@@ -1,16 +1,17 @@
 import { isCodeLang } from "../CodeHighlight";
 
 /**
- * 把正文 HTML 转成 Markdown（只为"发布到开源中国 / 博客园 / 掘金"这三条链路服务，不进库、不改编辑器内容）。
- * 这三家的写作页都是 Markdown 编辑器，所以不像微信/知乎/CSDN 那样给 HTML，而要给一段 Markdown 文本。
+ * 把正文 HTML 转成 Markdown（只为"发布到 CSDN / 开源中国 / 博客园 / 掘金"这几条链路服务，
+ * 不进库、不改编辑器内容）。这几家的写作页都是 Markdown 编辑器，所以不像微信/知乎那样给 HTML，
+ * 而要给一段 Markdown 文本。
  *
  * 转换取"Markdown 能表达的那些语义"，具体取舍：
  *   1. 代码块 → 围栏（``` + 语言）。语言本来就在我们的 data-lang 上（见 CodeBlock.ts 的入库形态），
  *      直接抄进围栏就行，比从 class 里猜还准；
  *   2. 图片 → ![alt](src)，**src 原样保留** https://app.localhost/images/<文件名>：
- *      那是本程序 WebView2 的虚拟映射，对方的服务器取不到；站点脚本（JS/OSC.js）在写作页里
- *      向 native 要一次图片目录句柄，按文件名取出文件传它的图床后再换掉地址（与知乎/CSDN 同一套；
- *      博客园那条在 JS/CnBlogs.js，是同一套的 Markdown 版）。宽高不用带：正文里的图已经是按排版
+ *      那是本程序 WebView2 的虚拟映射，对方的服务器取不到；站点脚本在对方写作页里向 native
+ *      要一次图片目录句柄，按文件名取出文件传它的图床后再换掉地址（Markdown 正文的替换四家都一样，
+ *      收在 Msg.js 的 uploadMarkdownImages 里）。宽高不用带：正文里的图已经是按排版
  *      尺寸缩放好的那一份，对方按原始尺寸显示就是我们调好的大小；
  *   3. 装饰性样式（文字色 / 背景色 / 字体 / 字号 / 行高 / 对齐）**一律丢掉**：Markdown 没这套语法，
  *      留着只能写成内联 HTML，而那边多半也不会认；

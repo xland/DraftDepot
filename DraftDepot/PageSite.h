@@ -10,16 +10,25 @@ class WindowSite;
  *   - 注册 WindowCloseRequested 转发 WM_CLOSE 关窗；
  *   - 注册 DocumentTitleChanged，把网页标题同步到窗口标题栏（窗口图标仍是我们自己的，不跟网页走）。
  * 不做主动脚本注入：站点脚本只填site 页面用到的那部分。
+ *
+ * "这个站点是什么样"——开哪个页面、注入哪份脚本——都收在这里（见本文件顶部的 siteHome 与
+ * buildStartUrl）：两边用的是同一个 type，摆在一起才不会登记了一边忘了另一边。
  */
 class PageSite
 {
 public:
-	PageSite(WindowSite* win, ComPtr<ICoreWebView2>& webview, const std::wstring& url);
+	PageSite(WindowSite* win, ComPtr<ICoreWebView2>& webview);
 	~PageSite();
 private:
 	HRESULT onMsgReceived(ICoreWebView2* webview, ICoreWebView2WebMessageReceivedEventArgs* args);
 	HRESULT onCloseWindow(ICoreWebView2* sender, IUnknown* args);
 	HRESULT onTitleChange(ICoreWebView2* sender, IUnknown* args);
+	/**
+	 * 按窗口 type 算出起始 URL：微信有 token 就直接进新建图文的编辑页（顺带拼一个毫秒时间戳，
+	 * 免得拿到缓存页），没有就落它的首页等用户登录；其他平台用 siteHome 里各自登记的落地页。
+	 * 没登记过的 type 返回空串（调用方拿到空串不导航）
+	 */
+	std::wstring buildStartUrl();
 	/// 注入站点脚本：把 Msg.js（DDMsg 这个 IPC 客户端）与按窗口 type 取到的同名脚本
 	/// （type "WeiXin" → WeiXin.js）拼在一起注册；必须在 Navigate 之前调，否则首屏文档赶不上
 	void injectSiteScript(ComPtr<ICoreWebView2>& webview);
@@ -48,5 +57,7 @@ private:
 private:
 	WindowSite* win;
 	ComPtr<ICoreWebView2> webview;
-	std::wstring url;
+	/// 开窗时导航进去的那个地址（见 buildStartUrl）。页面之后跳到哪儿它不跟着变，
+	/// 只在这里当"本窗口打开的是哪个站点"用：站点脚本不给 url 取 cookie 时，取的就是它
+	std::wstring startUrl;
 };

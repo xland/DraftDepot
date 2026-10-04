@@ -11,7 +11,7 @@
 //
 // 图片要额外跑一趟：正文里的图是 https://app.localhost/images/<文件名>（本程序 WebView2 的虚拟映射），
 // 掘金的服务器取不到，得按文件名从本机图片目录取文件、传它的图床，拿到地址换掉 Markdown 里的图片地址
-// 再灌进去。取文件与"这张图传过没有"由 Msg.js 管（DDMsg.imageUrl），这里只留本站点自己的上传
+// 再灌进去。取文件、传图床、换地址这套全由 Images.js 管（DDImages.uploadMarkdownImages），这里只留本站点自己的上传
 // 接口 uploadImage——它跟 OSC/CnBlogs 那两家不一样：不发自己的请求，而是把文件交给页面去传
 // （见 uploadImage 上的说明）。目录句柄只能由 native 给：脚本跑在网页上下文里，碰不到本机文件系统，
 // 光有路径也造不出 File 对象。
@@ -22,12 +22,6 @@
 const EDIT_PAGE_PREFIX = "/editor/drafts/";
 
 const CHECK_INTERVAL = 600;
-
-/** 正文里的图：https://app.localhost/images/<文件名>；不是这个前缀的（外链图）抓不到 */
-const IMAGE_URL_PREFIX = "https://app.localhost/images/";
-
-/** 抓正文里的图片地址：![](...) 与 <img src="..."> 都认 → 文件名那一截 */
-const IMAGE_URL_PATTERN = /https:\/\/app\.localhost\/images\/([^)\s"']+)/g;
 
 /** 传一张图最多等这么久：五步链路加网络，慢的时候要好几秒，大图更久 */
 const UPLOAD_TIMEOUT = 60000;
@@ -75,7 +69,7 @@ function setTitle(input, text) {
  * 先把编辑器清空：这样粘贴完正文里只有这一张，抠地址不会抠到别的上。灌正文是最后一步 setValue，
  * 中间这些空档不会被用户看见（整段都盖着遮罩）。
  *
- * 上传是异步的、也没有回调可用，只能轮询正文等那一行出现；等到或超时为止（超时由 Msg.js 接住，
+ * 上传是异步的、也没有回调可用，只能轮询正文等那一行出现；等到或超时为止（超时由 Images.js 接住，
  * 那张图保留原地址，不拦别的）
  */
 async function uploadImage(file) {
@@ -106,29 +100,6 @@ async function uploadImage(file) {
   throw new Error("等不到上传结果");
 }
 
-/**
- * 把 Markdown 里的图全部换成图床地址：取文件与"这张图传过没有"由 Msg.js 管（DDMsg.imageUrl），
- * 这里只管按名字把拿到的地址换回 Markdown 里（与 OSC/CnBlogs 那一段同构：那边的正文也是 Markdown）。
- * 外链图抓不到文件名，原样留着。串行一张张来：图一般不多，省得并发把它限流了。
- * 某张失败就保留原地址——多半是裂图，但不该为一张图把整篇都拦下
- */
-async function uploadImages(text) {
-  if (!text.includes(IMAGE_URL_PREFIX)) return text;
-  // 同一张图可能在正文里出现多次：去重，只处理一次
-  const names = [...new Set([...text.matchAll(IMAGE_URL_PATTERN)].map((matched) => matched[1]))];
-  let result = text;
-  for (const name of names) {
-    // 传过就直接用旧地址，没传过才取文件传一次（见 Msg.js 的 imageUrl）
-    const url = await DDMsg.imageUrl(name, uploadImage).catch((err) => {
-      console.log("[DraftDepot] 图片上传失败", name, err);
-      return "";
-    });
-    if (!url) continue;
-    result = result.split(IMAGE_URL_PREFIX + name).join(url);
-  }
-  return result;
-}
-
 const timer = setInterval(async () => {
   // 只在顶层文档干活：注入脚本每个 iframe 也会跑一遍，别钻到别人的框里去做判断
   if (window.self !== window.top) return;
@@ -144,14 +115,14 @@ const timer = setInterval(async () => {
   // 两份都空 = 这一轮早给过了（页面刷新/跳转会让本脚本整个重跑），或这篇本来就没内容：都别动手
   if (!article || (!article.title && !article.html)) return;
 
-  // 灌标题正文这一整段都盖着遮罩：那期间页面是半截的，别让人插手（见 Msg.js）
-  await DDMsg.withMask(async () => {
+  // 灌标题正文这一整段都盖着遮罩：那期间页面是半截的，别让人插手（见 Mask.js）
+  await DDMask.withMask(async () => {
     if (article.title) setTitle(titleInput, article.title);
     // 字段叫 html，这一趟装的其实是 Markdown（见文件头）：图先传上去换成图床地址再灌进去
     // （见文件头说明）。传图会把编辑器清空腾地方，所以正文一定在传完之后再写——
     // CodeMirror 的 setValue 会触发 change，ByteMD 自己会把它收进 model，右侧预览跟着刷新，
     // 不用像标题那样绕 Vue
-    if (article.html) cm.setValue(await uploadImages(article.html));
+    if (article.html) cm.setValue(await DDImages.uploadMarkdownImages(article.html, uploadImage));
   });
   console.log("[DraftDepot] 文章已灌入掘金编辑器");
 }, CHECK_INTERVAL);

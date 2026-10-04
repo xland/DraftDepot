@@ -168,6 +168,9 @@
   </ItemGroup>
   <ItemGroup>
     <None Include="JS\Msg.js" />
+    <None Include="JS\Content.js" />
+    <None Include="JS\Images.js" />
+    <None Include="JS\Mask.js" />
     <None Include="JS\OSC.js" />
     <None Include="JS\WeiXin.js" />
     <None Include="JS\ZhiHu.js" />

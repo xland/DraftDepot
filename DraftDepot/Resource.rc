@@ -3,6 +3,9 @@
 #undef APSTUDIO_READONLY_SYMBOLS
 100 ICON "..\\Doc\\logo.ico"
 Msg.js RCDATA "JS/Msg.js"
+Content.js RCDATA "JS/Content.js"
+Images.js RCDATA "JS/Images.js"
+Mask.js RCDATA "JS/Mask.js"
 WeiXin.js RCDATA "JS/WeiXin.js"
 ZhiHu.js RCDATA "JS/ZhiHu.js"
 CSDN.js RCDATA "JS/CSDN.js"
