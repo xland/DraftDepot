@@ -55,7 +55,17 @@ class EditorContent extends CtrlBase {
 
   /** 当前正文的 HTML：入库就是取它。代码块在这里剥掉着色，只留纯文本与语言 */
   get content(): string {
-    return stripCodeBlocks(exportContent(this.editor));
+    const html = stripCodeBlocks(exportContent(this.editor));
+    // roosterjs 导出时会把浏览器默认色 rgb(0, 0, 0) 写到每段 div 的 style 上，
+    // 既多余又盖掉 CSS 里的 #333333；剥掉它，颜色回归 CSS
+    const doc = new DOMParser().parseFromString(html, "text/html");
+    for (const el of Array.from(doc.body.querySelectorAll<HTMLElement>("[style]"))) {
+      const style = el.getAttribute("style") ?? "";
+      const cleaned = style.replace(/color:\s*rgb\(0,\s*0,\s*0\)\s*;?/gi, "").trim();
+      if (cleaned) el.setAttribute("style", cleaned);
+      else el.removeAttribute("style");
+    }
+    return doc.body.innerHTML;
   }
 
   /**

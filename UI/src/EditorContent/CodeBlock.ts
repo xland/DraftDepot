@@ -1,12 +1,6 @@
 import { createEntity } from "roosterjs-content-model-dom";
 import { insertEntity } from "roosterjs-content-model-api";
-import type {
-  ContentModelBlock,
-  ContentModelEntity,
-  ContentModelParagraph,
-  ReadonlyContentModelBlock,
-  IEditor,
-} from "roosterjs-content-model-types";
+import type { ContentModelBlock, ContentModelEntity, ContentModelParagraph, ReadonlyContentModelBlock, IEditor } from "roosterjs-content-model-types";
 import { DEFAULT_LANG, highlightCode, isCodeLang, type CodeLangId } from "../CodeHighlight";
 
 /**
@@ -185,3 +179,4 @@ function placeholderIndex(block: ContentModelParagraph): number | null {
   const matched = new RegExp(`^${PLACEHOLDER_PREFIX}(\\d+)$`).exec(text);
   return matched ? Number(matched[1]) : null;
 }
+

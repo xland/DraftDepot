@@ -4,6 +4,7 @@ import { createJavaScriptRegexEngine } from "shiki/engine/javascript";
 import githubLight from "shiki/themes/github-light.mjs";
 import c from "shiki/langs/c.mjs";
 import cpp from "shiki/langs/cpp.mjs";
+import csharp from "shiki/langs/csharp.mjs";
 import css from "shiki/langs/css.mjs";
 import go from "shiki/langs/go.mjs";
 import html from "shiki/langs/html.mjs";
@@ -36,6 +37,7 @@ export const CODE_LANGS = [
   { id: "html", name: "HTML" },
   { id: "css", name: "CSS" },
   { id: "cpp", name: "C++" },
+  { id: "csharp", name: "C#" },
   { id: "c", name: "C" },
   { id: "python", name: "Python" },
   { id: "rust", name: "Rust" },
@@ -52,7 +54,7 @@ export const DEFAULT_LANG: CodeLangId = "typescript";
 
 const highlighter = createHighlighterCoreSync({
   themes: [githubLight],
-  langs: [c, cpp, css, go, html, java, javascript, python, rust, sql, typescript, xml],
+  langs: [c, cpp, csharp, css, go, html, java, javascript, python, rust, sql, typescript, xml],
   engine: createJavaScriptRegexEngine(),
 });
 
@@ -65,3 +67,4 @@ export function highlightCode(code: string, lang: CodeLangId): string {
 export function isCodeLang(value: string | undefined): value is CodeLangId {
   return CODE_LANGS.some((item) => item.id === value);
 }
+

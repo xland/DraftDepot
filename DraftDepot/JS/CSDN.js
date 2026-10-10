@@ -44,6 +44,12 @@ const MAX_ATTEMPTS = 3;
 /** 落笔后到校验之间留的余量：它对 paste / input 的处理未必在同一个 tick 里收尾 */
 const PASTE_SETTLE = 100;
 
+/**
+ * 编辑区出现后等多久再动手：CSDN 会异步加载缓存的草稿，编辑区刚渲染出来时里面是空的，
+ * 草稿随后才填进来。不等的话我们写进去的内容会被草稿覆盖。这段时间里 clearBox 会把草稿清掉
+ */
+const DRAFT_WAIT = 2000;
+
 let filled = false; // 本文档已经灌过一轮：页面自身的后续刷新不该再糊一遍
 
 /**
@@ -183,7 +189,7 @@ function checkWritten(el, text) {
 }
 
 /**
- * 次选：给它派发一次带纯文本的 paste，走的就是人手 Ctrl+V 那条流水线。
+ * 首选：给它派发一次带纯文本的 paste，走的就是人手 Ctrl+V 那条流水线。
  * 它拿到剪贴板里的文本后会自己按行重建编辑区结构——换行、代码块围栏这些都是这么立起来的。
  * 之前用的是 execCommand("insertText")，那是把整段当"一段文字"插进去，换行符在 <pre> 里能不能
  * 站得住全看它随后的重排，实测糊成了一整行，所以换到这里。
@@ -204,9 +210,12 @@ async function tryPaste(el, text) {
 }
 
 /**
- * 首选：照它自己的结构写 DOM——每行一个 div.cledit-section，行尾挂一个换行节点。
+ * 次选：照它自己的结构写 DOM——每行一个 div.cledit-section，行尾挂一个换行节点。
  * 不扮演它的着色（那一堆 token span），只保证源码与换行是对的：收下 InputEvent 后它会按整份
  * 源码重新切块、重新高亮。空行只留一个换行节点：<br> 足够把那一行撑住
+ *
+ * 校验在派发 InputEvent 之前做：我们刚写的 DOM 一定是准的；等 cledit 收到事件重排后再校验，
+ * 它的结构变化会让 checkWritten 误判失败，导致后续 fallback 把正确内容清掉换成没换行的
  */
 async function writeLines(el, text) {
   clearBox(el);
@@ -222,9 +231,10 @@ async function writeLines(el, text) {
     section.appendChild(makeLineFeed());
     el.appendChild(section);
   }
+  const ok = checkWritten(el, text);
   el.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText" }));
   await sleep(PASTE_SETTLE);
-  return checkWritten(el, text);
+  return ok;
 }
 
 /** 兜底：还是那个 execCommand，内容多半能进、换行可能糊——前两条都不成时才轮到它 */
@@ -240,10 +250,11 @@ async function tryInsert(el, text) {
 /**
  * 把整段 Markdown 写进编辑区：三条路依次试，一条成了就收。
  * 每条都以清空开头，所以怎么重试都不会把正文叠加两遍（上一版就是这么写出两张图的）。
- * 顺序有讲究：先照它的结构写 DOM——这一条不依赖它的 paste 处理器挂没挂上，也不看编辑命令的脸色
+ * 顺序有讲究：先走 paste——它走的是 CSDN 自己的粘贴流水线，换行、代码块围栏都是它自己立起来的，
+ * 最可靠；writeLines 是次选，手动写 DOM 不依赖它的 paste 处理器；tryInsert 是最后兜底
  */
 async function setContent(el, text) {
-  return (await writeLines(el, text)) || (await tryPaste(el, text)) || (await tryInsert(el, text));
+  return (await tryPaste(el, text)) || (await writeLines(el, text)) || (await tryInsert(el, text));
 }
 
 /**
@@ -277,6 +288,12 @@ const timer = setInterval(async () => {
 
   if (filled) return;
   filled = true;
+
+  // 等 CSDN 把缓存的草稿填进编辑器：编辑区刚渲染出来时是空的，草稿随后异步加载。
+  // 不等的话我们写进去的内容会被随后到的草稿覆盖。等完之后 writeContent 里的 clearBox
+  // 会把草稿清掉，再灌我们的正文
+  await sleep(DRAFT_WAIT);
+
   const article = await DDMsg.invoke("getArticle");
   // 两份都空 = 这一轮早给过了（页面刷新/跳转会让本脚本整个重跑），或这篇本来就没内容：都别动手
   if (!article || (!article.title && !article.html)) return;

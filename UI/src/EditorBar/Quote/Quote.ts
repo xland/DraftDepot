@@ -1,5 +1,5 @@
 import { createButton } from "../../ToolbarButton";
-import { toggleBlockQuote } from "roosterjs-content-model-api";
+import { clearFormat, getFormatState, toggleBlockQuote } from "roosterjs-content-model-api";
 import type { ContentModelFormatContainerFormat } from "roosterjs-content-model-types";
 import quoteSvg from "../icon/quote.svg?raw";
 
@@ -18,8 +18,8 @@ import quoteSvg from "../icon/quote.svg?raw";
 const QUOTE_FORMAT: ContentModelFormatContainerFormat = {
   marginTop: "1em",
   marginBottom: "1em",
-  marginLeft: "40px",
-  marginRight: "40px",
+  marginLeft: "10px",
+  marginRight: "10px",
   paddingTop: undefined,
   paddingRight: undefined,
   paddingBottom: undefined,
@@ -32,6 +32,16 @@ const QUOTE_FORMAT: ContentModelFormatContainerFormat = {
 export const quoteButton = createButton({
   icon: quoteSvg,
   title: "引用",
-  onClick: (editor) => toggleBlockQuote(editor, QUOTE_FORMAT),
+  onClick: (editor) => {
+    // 已在引用里：取消引用，不调 clearFormat——它会把 blockquote 容器拆开，
+    // 导致 toggleBlockQuote 认不出"该取消引用"，反而又套一层
+    if (getFormatState(editor).isBlockQuote) {
+      toggleBlockQuote(editor, QUOTE_FORMAT);
+      return;
+    }
+    // 套引用：先清除选中文本的所有样式（加粗、颜色、字号…），仅保留段落与换行，再套引用
+    clearFormat(editor);
+    toggleBlockQuote(editor, QUOTE_FORMAT);
+  },
   isChecked: (state) => state.isBlockQuote === true,
 });

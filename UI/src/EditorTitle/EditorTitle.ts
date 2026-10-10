@@ -3,6 +3,7 @@ import html from "./EditorTitle.html?raw";
 import CtrlBase from "../CtrlBase";
 import Msg from "../Msg";
 import EditorContent from "../EditorContent/EditorContent";
+import forWeiXin from "../EditorContent/WeiXinHtml";
 import toMarkdown from "../EditorContent/Markdown";
 
 /**
@@ -29,7 +30,11 @@ const publishTargets = [
  * （JS/ZhiHu.js 的 forZhiHu）。图片一律由站点脚本在对方编辑页里传图床（见各 JS/*.js）。
  * 加站点默认什么都不用登记。
  *
- * 例外是这几家 Markdown 编辑器：它们收的是 Markdown 文本而不是 HTML，所以整篇先在这里转一次
+ * 例外是微信的代码块：它要 shiki 着色（内联 color，公众号会把外部 CSS 挡在外面），
+ * 而站点脚本是 exe 资源里的裸 JS，拿不到着色器，所以代码块换成 code-snippet 最终形状这一步
+ * 必须在前端做完（见 WeiXinHtml），摊平段落那一步仍在对方页面做。
+ *
+ * 另一个例外是这几家 Markdown 编辑器：它们收的是 Markdown 文本而不是 HTML，所以整篇先在这里转一次
  * （见 Markdown）；InfoQ 虽然也是给 Markdown，但它是富文本编辑器，由站点脚本把整篇 Markdown 做成
  * .md 文件交给它自己的"导入 Markdown"，这样代码块的语言标识才不会丢（见 JS/InfoQ.js）。
  */
@@ -46,6 +51,13 @@ const markdownSites = new Set([
   // 阿里云开发者社区：写文章页是 Markdown 源码编辑器（左边源码右边预览）
   "AliYun",
 ]);
+
+/**
+ * 富文本站点里需要在前端先收拾一次正文的：只有微信——代码块着色必须在前端做完（见上面说明）。
+ */
+const htmlSiteConverters: Record<string, (html: string) => string> = {
+  WeiXin: forWeiXin,
+};
 
 /**
  * 编辑器顶部的文章标题栏（模块单例）。
@@ -72,17 +84,18 @@ class EditorTitle extends CtrlBase {
     // 用 title 属性精确锁定按钮，避免依赖 HTML 里 8 个 .publishBtn 的顺序
     for (const target of publishTargets) {
       const btn = this.dom.querySelector<HTMLElement>(`.publishBtn[title="${target.title}"]`);
-      // 只有 Markdown 站点要在这里转一手（见 markdownSites），其余站点的改造都在对方页面上做。
+      // 只有 Markdown 站点要在这里转一手（见 markdownSites），微信的代码块也得在前端着色（见 htmlSiteConverters）。
       // 转 Markdown 是同步的，这里一律 await 是为了将来换异步实现不用改调用处
       btn.addEventListener("click", async () => {
         const content = EditorContent.content;
         // 连同当前标题与正文一起交给 native：site 窗口里的脚本（如 WeiXin.js）进到对方编辑器后会来取。
         // 两个窗口是各自独立的 WebView2，互相看不见，内容只能靠 native 中转。
         // 大多数站点给原始正文，形态收拾由对方页面上的站点脚本做（见 markdownSites 的说明）
+        const htmlConvert = htmlSiteConverters[target.type];
         Msg.invoke("openSite", {
           type: target.type,
           title: this.input.value,
-          html: markdownSites.has(target.type) ? await toMarkdown(content) : content,
+          html: htmlConvert ? htmlConvert(content) : markdownSites.has(target.type) ? await toMarkdown(content) : content,
         });
       });
     }
