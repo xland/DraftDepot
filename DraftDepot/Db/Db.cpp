@@ -103,30 +103,6 @@ namespace
         }
     }
 
-    /// 旧库里的 image 表这一列还叫 img_path（存的还是 images/xxx.png 这种相对路径），
-    /// 这里把它改名并顺手去掉路径前缀，跟新表的 img_name 对齐；没建过这张表则什么都不做。
-    /// 等确认没人用旧库了，本函数和下面的调用点可以一起删掉
-    void migrateImageTable()
-    {
-        sqlite3_stmt* stmt = nullptr;
-        if (sqlite3_prepare_v2(conn, "PRAGMA table_info(image);", -1, &stmt, nullptr) != SQLITE_OK)
-            return;
-
-        bool hasOldColumn = false;
-        while (sqlite3_step(stmt) == SQLITE_ROW)
-        {
-            auto name = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 1));
-            if (name && std::strcmp(name, "img_path") == 0) hasOldColumn = true;
-        }
-        sqlite3_finalize(stmt);
-        if (!hasOldColumn) return;
-
-        // sqlite 3.25 起支持 RENAME COLUMN，唯一约束与索引会自动跟着改到新列名上
-        sqlite3_exec(conn, "ALTER TABLE image RENAME COLUMN img_path TO img_name;", nullptr, nullptr, nullptr);
-        sqlite3_exec(conn, "UPDATE image SET img_name = REPLACE(img_name, 'images/', '')"
-            " WHERE img_name LIKE 'images/%';", nullptr, nullptr, nullptr);
-    }
-
     /// 外键约束默认是关闭的：不显式打开，建表时写的 ON DELETE CASCADE / SET NULL 全是摆设。
     /// 这个开关不是写进库文件的持久属性，每条连接都必须设一次，且要设在事务之外。
     /// 打开之后两件事由 SQLite 兜住：删分类时它的子孙被 CASCADE 连带删掉；
@@ -167,9 +143,6 @@ namespace
         }
 
         createSchema();
-        migrateImageTable();
-        // 外键放最后开：让建表和旧库迁列这些一次性动作跑在跟升级前一样的环境里，
-        // 万一旧库还留着不合外键的历史数据也不会卡住迁移。此后的正常读写都在约束之下
         enableForeignKeys();
     }
 }
