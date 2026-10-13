@@ -24,8 +24,6 @@ private:
 	void onSize(WPARAM wParam, LPARAM lParam);
 	void onDestroy();
 	void onGetMinMaxInfo(MINMAXINFO* mmi);
-	/** 接住后台线程投来的回包（WM_DD_POST_JSON）：lParam 是 new 出来的 std::wstring，发完删掉 */
-	void onPostJson(LPARAM lParam);
 	/** 默认窗口矩形：DEFAULT_WIDTH x DEFAULT_HEIGHT，摆在主显示器工作区正中。
 	    建窗、"从最大化还原"都用它，两处的默认大小因此永远同步 */
 	RECT defaultRect() const;

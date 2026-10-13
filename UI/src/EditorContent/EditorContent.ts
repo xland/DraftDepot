@@ -7,12 +7,10 @@ import { extractCodeBlocks, fillCodeBlocks, findCodeBlock, stripCodeBlocks } fro
 import { EditPlugin, HyperlinkPlugin, ImageEditPlugin, PastePlugin, ShortcutPlugin, WatermarkPlugin } from "roosterjs";
 import EditorPlugin from "./EditorPlugin";
 import ImagePlugin from "./ImagePlugin";
-import ImageResizePlugin from "./ImageResize";
 
 class EditorContent extends CtrlBase {
   editor: Editor | null = null;
   private imagePlugin = new ImagePlugin();
-  private imageResizePlugin = new ImageResizePlugin();
 
   constructor() {
     super(html);
@@ -35,10 +33,15 @@ class EditorContent extends CtrlBase {
         new ShortcutPlugin(),
         // 粘贴/拖放进来的内联图片（base64）落盘换持久 URL
         this.imagePlugin,
-        // 图片被拖着改过尺寸后，按新尺寸另存一份（原图留着），正文改引那一份
-        this.imageResizePlugin,
         new EditorPlugin(),
       ],
+      // 剪贴板上没有 HTML（复制来的是纯文本）时按纯文本粘，别走默认的 normal。
+      // normal 那一路 roosterjs 会硬给每个文本段塞一个 textColor = rgb(0,0,0)
+      // （见它 paste/mergePasteContent 的 getSegmentFormatForPaste），出 DOM 时每段文本都要建一个
+      // span 才写得下这个颜色，于是纯文本平白被包成 <span style="color: rgb(0, 0, 0);">。
+      // 换成 asPlainText 就不走那一段，段格式是空的，那个没有属性的 span 会被它自己优化掉，
+      // 粘进来的就是纯文本。有 HTML 的照旧按原格式粘（Word/网页复制来的那些还需要它）
+      defaultPasteType: (_doc, clipboardData) => (clipboardData.rawHtml ? "normal" : "asPlainText"),
       // 不设 defaultSegmentFormat：默认字体/字号/颜色交给 #editorContent 的 CSS（见 EditorContent.scss）。
       // 设了它反而有害——roosterjs 的 FormatPlugin 会在每次输入时把默认格式刷成段落上的内联 style，
       // 于是每段都挂着同一串 style，还会盖掉 CSS 里的颜色；只有用户手动改过的样式才该写进 HTML

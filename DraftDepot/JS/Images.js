@@ -34,6 +34,28 @@
     return await (await dir.getFileHandle(name)).getFile();
   }
 
+  /**
+   * 缩放产物名（img_x@600x400.png）还原成原图名（img_x.png）。
+   * 早先的版本会把拖过尺寸的图另存一份、正文改引那一份；现在不另存了（拖拽只改编辑器里的
+   * 显示尺寸，不再在数据目录里多写文件），发布一律用原图。老文章正文里那种带 @宽x高 的名字，
+   * 在这里回退到原图——不必去改库里的正文，也不必删目录里那些旧产物
+   */
+  const RESIZED_SUFFIX = /@\d+x\d+(\.[^.]+)$/;
+  function originNameOf(name) {
+    return name.replace(RESIZED_SUFFIX, "$1");
+  }
+
+  /** 取这一张要传的图：原图。原图不在（被手删过）才退回按原名取，不至于把整趟上传弄崩 */
+  async function originFile(name) {
+    const origin = originNameOf(name);
+    try {
+      return await imageFile(origin);
+    } catch (err) {
+      if (origin === name) throw err;
+      return await imageFile(name);
+    }
+  }
+
   /** 正文里的图：https://app.localhost/images/<文件名> → 文件名；不是这个前缀的（外链图）返回空串 */
   function fileNameOf(src) {
     return src.startsWith(IMAGE_URL_PREFIX) ? src.slice(IMAGE_URL_PREFIX.length) : "";
@@ -47,10 +69,13 @@
    * 传失败不给地址，也不写库：下次会重新传
    */
   async function imageUrl(name, uploadFile) {
-    const cached = await DDMsg.invoke("getImageUrl", { name: name });
+    // 传的是原图，所以"传过没有"也按原图名记（见 originNameOf）：同一张图拖成几个尺寸，
+    // 传的还是同一份，不必重复传，也不会在图床上堆出几份一样大的副本
+    const file = originNameOf(name);
+    const cached = await DDMsg.invoke("getImageUrl", { name: file });
     if (cached && cached.url) return cached.url;
-    const url = await uploadFile(await imageFile(name));
-    if (url) await DDMsg.invoke("setImageUrl", { name: name, url: url });
+    const url = await uploadFile(await originFile(name));
+    if (url) await DDMsg.invoke("setImageUrl", { name: file, url: url });
     return url;
   }
 

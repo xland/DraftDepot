@@ -31,10 +31,6 @@ LRESULT Window::winMsg(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
     else if (msg == WM_GETMINMAXINFO) {
         self->onGetMinMaxInfo((PMINMAXINFO)lParam);
     }
-    else if (msg == WM_DD_POST_JSON) {
-        self->onPostJson(lParam);
-        return 0;
-    }
     return DefWindowProc(hwnd, msg, wParam, lParam);
 }
 
@@ -157,15 +153,6 @@ void Window::onDestroy()
     if (windows.empty()) {
         PostQuitMessage(0);
     }
-}
-
-void Window::onPostJson(LPARAM lParam)
-{
-    auto json = reinterpret_cast<std::wstring*>(lParam);
-    if (!json) return;
-    // 后台线程干完活投过来的：这里已经在 UI 线程上了，可以交给 WebView2 发
-    if (page) page->postJson(*json);
-    delete json;
 }
 
 void Window::onGetMinMaxInfo(MINMAXINFO* mmi)

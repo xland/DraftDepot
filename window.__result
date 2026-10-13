@@ -1,0 +1,5 @@
+### Error
+SyntaxError: Unexpected token '='
+    at eval (eval at evaluate (:367:30), <anonymous>:2:38)
+    at UtilityScript.evaluate (<anonymous>:369:16)
+    at UtilityScript.<anonymous> (<anonymous>:1:44)

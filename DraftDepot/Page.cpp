@@ -4,14 +4,10 @@
 #include "WindowSite.h"
 #include "Db/Category.h"
 #include "Db/Article.h"
-#include "Db/Db.h"
-#include "Db/Image.h"
 #include "Util.h"
-#include "ImageResize.h"
 
 #include <fstream>
 #include <filesystem>
-#include <thread>
 
 Page::Page(Window* win, ComPtr<ICoreWebView2>& webview) :win{ win }, webview{ webview }
 {
@@ -80,12 +76,6 @@ HRESULT Page::onMsgReceived(ICoreWebView2* webview, ICoreWebView2WebMessageRecei
     else if (method == L"getImageDir") {
         // 把图片目录句柄随回包发给 JS（自带回包逻辑，不走下面的统一 PostWebMessageAsJson）
         handleGetImageDir(result);
-        return S_OK;
-    }
-    else if (method == L"resizeImage") {
-        // args: { name, width, height }；编辑器里把图拖成新的显示尺寸后，按这个尺寸另存一份。
-        // 自带回包（异步，见 Page.h 的说明），所以不走下面的统一 PostWebMessageAsJson
-        handleResizeImage(param);
         return S_OK;
     }
     else if (method == L"getCategories") {
@@ -346,125 +336,4 @@ void Page::handleGetImageDir(JsonObject& result)
     result.SetNamedValue(L"error", JsonValue::CreateStringValue(L"获取图片目录失败"));
     auto json = result.Stringify();
     webview->PostWebMessageAsJson(json.c_str());
-}
-
-void Page::postJson(const std::wstring& json)
-{
-    webview->PostWebMessageAsJson(json.c_str());
-}
-
-namespace
-{
-    /**
-     * 这个图片文件还有没有文章在引用：数 image 表里 is_delete = 0 的记录（见 Db/Image.h）。
-     *
-     * 注意记录是滞后的：正文拖完还没入库时，库里那行写的仍是旧文件。所以调用方要先调
-     * Image::renameReferences 把旧文件的记录改指到新产物上，再来问这一句——否则当前这篇
-     * 自己的滞后记录会把要清理的文件一直保着。
-     * 查不到（库没开）时按"有人引用"处理：宁可留一份垃圾文件，也别把别处正文里的图删成裂图
-     */
-    bool stillReferenced(const std::wstring& imageName)
-    {
-        sqlite3* conn = Db::get();
-        if (!conn) return true;
-        int count = 0;
-        static const char* sql = "SELECT COUNT(*) FROM image WHERE img_name = ?1 AND is_delete = 0;";
-        if (sqlite3_stmt* stmt = nullptr; sqlite3_prepare_v2(conn, sql, -1, &stmt, nullptr) == SQLITE_OK)
-        {
-            sqlite3_bind_text16(stmt, 1, imageName.c_str(), -1, SQLITE_TRANSIENT);
-            if (sqlite3_step(stmt) == SQLITE_ROW) count = sqlite3_column_int(stmt, 0);
-            sqlite3_finalize(stmt);
-        }
-        return count > 0;
-    }
-
-    /**
-     * 清掉同一张原图早先拖出来的其它尺寸（img_x@600x400.png 这类），只留这一次生成的那一份。
-     *
-     * 为什么扫目录而不是只删前端报上来的那一份：连着拖几下、或中途生成的尺寸，前端报不全，
-     * 目录里就攒下没人认领的旧文件。产物名是确定性的（原主名@宽x高+原扩展名），扫一遍就认得出：
-     * 原图自己不带 @，别的图主名不同，都落不进这个范围。
-     */
-    void removeStaleResized(const std::filesystem::path& dir, const std::wstring& stem,
-        const std::wstring& ext, const std::wstring& keep)
-    {
-        std::error_code ec;
-        for (const auto& entry : std::filesystem::directory_iterator(dir, ec))
-        {
-            if (!entry.is_regular_file()) continue;
-            auto fileName = entry.path().filename().wstring();
-            if (fileName == keep) continue; // 这一次要用的这份：留着
-            if (fileName.rfind(stem + L"@", 0) != 0) continue;
-            if (fileName.size() < stem.size() + 1 + ext.size()) continue;
-            if (fileName.compare(fileName.size() - ext.size(), ext.size(), ext) != 0) continue;
-            // 还有文章引用就留着：删了那边正文里的图就裂了
-            if (stillReferenced(fileName)) continue;
-            std::filesystem::remove(entry.path(), ec);
-        }
-    }
-}
-
-void Page::handleResizeImage(const JsonObject& param)
-{
-    JsonObject args = Util::msgArgs(param);
-    std::wstring name = Util::argString(args, L"name");
-    std::wstring oldName = Util::argString(args, L"oldName");
-    auto width = static_cast<int>(Util::argNumber(args, L"width"));
-    auto height = static_cast<int>(Util::argNumber(args, L"height"));
-    std::wstring id{ param.GetNamedString(L"id") };
-    HWND hwnd = win->hwnd;
-
-    // 缩放放到后台线程做：WIC 处理一张大图要几百毫秒，直接在消息回调里做会把界面卡住这一会儿。
-    // 回包只能回 UI 线程发（WebView2 的接口只认建它的那个线程），所以做完投 WM_DD_POST_JSON，
-    // 让窗口过程替我们把 JSON 发出去（见 Page.h 里那条消息的说明）
-    std::thread([hwnd, id, name, oldName, width, height]()
-    {
-        std::wstring newName;
-        // 名字都来自正文里 img 的地址，只认"一个裸文件名"：带分隔符或 .. 的一律不碰，
-        // 免得被拼成 ../ 去读写 images 目录以外的文件
-        auto plain = [](const std::wstring& n)
-        {
-            return !n.empty() && n.find_first_of(L"/\\:") == std::wstring::npos
-                && n.find(L"..") == std::wstring::npos;
-        };
-        if (plain(name) && width > 0 && height > 0)
-        {
-            std::filesystem::path src{ name };
-            auto dir = Env::getDataPath() / L"images";
-            auto stem = src.stem().wstring();
-            auto ext = src.extension().wstring();
-            // 目标名是确定性的：原主名 + @宽x高 + 原扩展名。后缀里认得出原图是谁，
-            // 前端靠这一点在放大时仍从原图重新生成，不会拿缩略图去放大
-            newName = stem + L"@" + std::to_wstring(width) + L"x" + std::to_wstring(height) + ext;
-            auto dst = dir / newName;
-            std::error_code ec;
-            if (std::filesystem::exists(dst, ec))
-            {
-                // 已经有了：直接给名字，别再生成一遍
-            }
-            else if (!ImageResize::resize((dir / src).wstring(), dst.wstring(), width, height))
-            {
-                std::filesystem::remove(dst, ec); // 失败可能留下半截文件
-                newName.clear();                  // 空串 = 没处理，前端继续用原图
-            }
-
-            // 生成失败就什么都不动：那会儿正文还指着旧文件
-            if (!newName.empty())
-            {
-                // 正文已经改成引用这一份了，可库里那行还写着旧文件（入库是之后的事）。
-                // 先把记录改指过来，下面清理时才认得出旧文件已经没人用；不改的话，
-                // 当前这篇那条滞后记录会把要清理的文件一直保着
-                if (plain(oldName) && oldName != newName) Image::renameReferences(oldName, newName);
-                // 只留"原图 + 最后拖出来的这一份"：同一张原图早先拖出来的其它尺寸都清掉
-                // （见 removeStaleResized）
-                removeStaleResized(dir, stem, ext, newName);
-            }
-        }
-
-        // 手工拼而不是用 JsonObject：winrt 的对象带着线程公寓，后台线程上不好摆弄；
-        // id 与文件名都是程序生成的（不含引号与反斜杠），直接拼出来就是合法 JSON
-        std::wstring json = L"{\"id\":\"" + id + L"\",\"result\":{\"name\":\"" + newName + L"\"}}";
-        auto* payload = new std::wstring{ std::move(json) };
-        if (!PostMessage(hwnd, WM_DD_POST_JSON, 0, reinterpret_cast<LPARAM>(payload))) delete payload;
-    }).detach();
 }

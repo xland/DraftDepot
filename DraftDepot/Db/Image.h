@@ -18,9 +18,4 @@ public:
 	///   库里有、正文里没有的 → is_delete 置 1。
 	/// 整个同步在一个事务里，中途出错不会把记录标得半对半错。
 	static void syncFromContent(sqlite3_int64 articleId, const std::wstring& contentHtml);
-	/// 把指向 from 的记录一律改成指向 to：图片被拖成新尺寸后，正文里引用的是新生成的那一份
-	/// （img_x.png → img_x@600x400.png），而入库要等之后那一次保存，库里那行还写着旧的。
-	/// 调用方（Page::handleResizeImage）靠这一步把记录拨到新文件上，才好判断旧文件还有没有人用。
-	/// 别的文章里若也引用了 from，会被一并改过去——那只是记录层面，它们下次入库时按正文自愈
-	static void renameReferences(const std::wstring& from, const std::wstring& to);
 };

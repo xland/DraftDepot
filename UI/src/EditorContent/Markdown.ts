@@ -11,8 +11,10 @@ import { isCodeLang } from "../CodeHighlight";
  *   2. 图片 → ![alt](src)，**src 原样保留** https://app.localhost/images/<文件名>：
  *      那是本程序 WebView2 的虚拟映射，对方的服务器取不到；站点脚本在对方写作页里向 native
  *      要一次图片目录句柄，按文件名取出文件传它的图床后再换掉地址（Markdown 正文的替换四家都一样，
- *      收在 Msg.js 的 uploadMarkdownImages 里）。宽高不用带：正文里的图已经是按排版
- *      尺寸缩放好的那一份，对方按原始尺寸显示就是我们调好的大小；
+ *      收在 Msg.js 的 uploadMarkdownImages 里）。宽高要带上：发布传的是原图（编辑器里拖过的
+ *      只是显示尺寸，不另存文件），不带的话对方就按原图大小显示了。Markdown 的图片语法带不上
+ *      尺寸，所以拖过的那张改写内联 HTML 的 <img width height>（GFM 认内联 HTML，几家都吃）；
+ *      没拖过的仍是 ![](src)，用不着多这一串；
  *   3. 装饰性样式（文字色 / 背景色 / 字体 / 字号 / 行高 / 对齐）**一律丢掉**：Markdown 没这套语法，
  *      留着只能写成内联 HTML，而那边多半也不会认；
  *   4. 下划线与上/下标 → 保留成内联 HTML（<u> / <sup> / <sub>）：这几个在中文技术文里真会用到，
@@ -61,11 +63,49 @@ function renderCodeSpan(text: string): string {
   return fence + pad + text + pad + fence;
 }
 
-/** 图片：![alt](src)；alt 里的方括号会撑破 Markdown 语法，去掉 */
+/** 属性值里的这几个字符会截断标签或被当成实体，按 HTML 的规矩转义 */
+function escapeAttr(value: string): string {
+  return value.replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+
+/** 只认整数（可带 px）：百分比、auto 之类当没有——拖出来的尺寸都是整数像素 */
+function pixels(value: string): number {
+  const matched = /^\s*(\d+(?:\.\d+)?)(?:px)?\s*$/.exec(value ?? "");
+  return matched ? Math.round(parseFloat(matched[1])) : 0;
+}
+
+/**
+ * 图片要写进 Markdown 的宽高（像素），拿不到就都是 0。出处有先后：
+ *   1. img 的 width/height 属性：编辑器里拖过尺寸的那张，roosterjs 就写在这上面
+ *      （见 roosterjs-content-model-dom 的 modelToDom/handleImage）；
+ *   2. 行内 style：粘贴进来的图常把尺寸写在 style 里；
+ *   3. 文件名：给老文章兜底——早先的版本会把拖过尺寸的图另存成 img_x@600x400.png
+ *      并让正文引用它，那时候尺寸只落在名字里（发布时是按名字还原成原图传的，见 Images.js）
+ */
+function imageSize(el: Element): { width: number; height: number } {
+  const style = (el as HTMLElement).style;
+  let width = pixels(el.getAttribute("width") ?? style.width);
+  let height = pixels(el.getAttribute("height") ?? style.height);
+  if (!width || !height) {
+    const matched = /@(\d+)x(\d+)(?=\.[^.]+$)/.exec(el.getAttribute("src") ?? "");
+    if (matched) {
+      width = width || parseInt(matched[1], 10);
+      height = height || parseInt(matched[2], 10);
+    }
+  }
+  return { width, height };
+}
+
+/**
+ * 图片：默认是 ![alt](src)（alt 里的方括号会撑破 Markdown 语法，去掉）；
+ * 拖过尺寸的那张要连宽高一起过去，而 Markdown 的图片语法带不上尺寸，改写成内联 HTML 的 <img>
+ */
 function renderImage(el: Element): string {
   const src = el.getAttribute("src") ?? "";
-  const alt = (el.getAttribute("alt") ?? "").replace(/[[\]]/g, "");
-  return `![${alt}](${src})`;
+  const alt = el.getAttribute("alt") ?? "";
+  const { width, height } = imageSize(el);
+  if (!width || !height) return `![${alt.replace(/[[\]]/g, "")}](${src})`;
+  return `<img src="${escapeAttr(src)}" alt="${escapeAttr(alt)}" width="${width}" height="${height}">`;
 }
 
 /** 链接：地址里有空格或括号时套尖括号，否则 Markdown 会把后半截当成标题文字 */

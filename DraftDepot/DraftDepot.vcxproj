@@ -157,7 +157,6 @@
     <ClCompile Include="Db\Db.cpp" />
     <ClCompile Include="Db\Site.cpp" />
     <ClCompile Include="Env.cpp" />
-    <ClCompile Include="ImageResize.cpp" />
     <ClCompile Include="main.cpp" />
     <ClCompile Include="Page.cpp" />
     <ClCompile Include="PageSite.cpp" />
@@ -193,7 +192,6 @@
     <ClInclude Include="Db\Db.h" />
     <ClInclude Include="Db\Site.h" />
     <ClInclude Include="Env.h" />
-    <ClInclude Include="ImageResize.h" />
     <ClInclude Include="Page.h" />
     <ClInclude Include="PageSite.h" />
     <ClInclude Include="SQLite\sqlite3.h" />

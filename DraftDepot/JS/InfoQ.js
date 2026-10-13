@@ -9,6 +9,7 @@
 //      做成 .md 文件交给工具条上那个"导入 Markdown"——它自己会把 Markdown 解析成富文本，
 //      代码块的语言标识（```javascript 之类）也就跟着一起过去了；自己往富文本里塞，
 //      语言只能丢（它的代码块语言是自己的一套下拉）。解析是纯本地的，不发上传请求。
+//      代价是它给每个块后面都多插一个空段落，正文行距被撑大——导入完清掉（见 removeEmptyParagraphs）。
 //
 // 登录不兜：没登录时 /draftbox 会被它送到首页（不是登录页），登录完也不会自动回来。
 // 所以在首页什么都不做，等人自己进草稿箱——本脚本每跳一次都会重跑，进了草稿箱就接着干。
@@ -134,6 +135,28 @@ async function importMarkdown(input, markdown) {
 }
 
 /**
+ * 它的导入器给每个块后面都塞了一个空段落：导进去 "A\n\nB"，正文变成
+ * <p>A</p><p><br></p><p>B</p><p><br></p>——一个段落分隔被做成两个段落，中间那个是空的，
+ * 于是行与行之间凭空多出一大截空档。换什么写法都躲不开：段落间空行、行尾两空格、行尾反斜杠、
+ * 甚至直接写 <p> 标签，出来都一样多一个空段；只有一个换行符的话它又把两行并成一行。
+ *
+ * 那些空段落不是正文里的东西，导入完删掉。直接改 DOM 就行：ProseMirror 挂着 MutationObserver
+ * 读外部改动，删完它自己的文档也跟着更新——实测删完刷新页面，存回去的草稿里也没有空段落
+ */
+function removeEmptyParagraphs(editor) {
+  if (!editor) return;
+  for (const p of Array.from(editor.querySelectorAll("p"))) {
+    // 只删"里面除 <br> 什么都没有"的段落——导入器塞的空段里就一个它自己的尾随 <br>。
+    // 不按"有没有文字"判断：图自己占一个段落、里面没有文字，那样会被误删；
+    // 图加载失败时它还会把 <img> 换成一句提示，那时候连 img 都找不到了
+    const empty = Array.from(p.childNodes).every(
+      (node) => node.nodeType === Node.ELEMENT_NODE && node.tagName === "BR",
+    );
+    if (empty) p.remove();
+  }
+}
+
+/**
  * 上传一张图，拿到它的图床地址。
  * 不用把文件塞回页面让它传（掘金那边是不得不那么做）：这边就一个 POST /api/v1/upload/form，
  * 图放在 FormData 的 file 字段里、身份在 cookie 里，返回 data.url 就是图床地址
@@ -189,7 +212,12 @@ const timer = setInterval(async () => {
     if (article.title) await setTitle(article.title);
     // 字段叫 html，这一趟装的其实是 Markdown（见文件头）：图先传上去换成图床地址，再整篇交给它
     // 自己的导入——语言标识跟着 Markdown 一起过去，自己塞进富文本就只能丢
-    if (article.html) await importMarkdown(mdInput, await DDImages.uploadMarkdownImages(article.html, uploadImage));
+    if (article.html) {
+      await importMarkdown(mdInput, await DDImages.uploadMarkdownImages(article.html, uploadImage));
+      // 导入完等一拍再收拾空段落：最后那几个块可能还没渲染出来，删早了会漏
+      await wait(500);
+      removeEmptyParagraphs(getEditor());
+    }
     // 导入会把正文整块重渲染，标题可能被这一轮渲染冲掉；已经写进去的话这一句 300ms 内就回来了
     if (article.title) await setTitle(article.title);
   });

@@ -69,20 +69,4 @@ void Image::syncFromContent(sqlite3_int64 articleId, const std::wstring& content
     sqlite3_exec(conn, "COMMIT;", nullptr, nullptr, nullptr);
 }
 
-void Image::renameReferences(const std::wstring& from, const std::wstring& to)
-{
-    sqlite3* conn = Db::get();
-    if (!conn || from.empty() || to.empty() || from == to) return;
 
-    // 同一篇里已经有 to 这条记录时（比如拖回过这个尺寸），改过去会撞 (article_id, img_name)
-    // 唯一键：OR REPLACE 让冲突的那行被这一行取代，正好是想要的结果——一篇里对同一张图
-    // 只留一条记录，指向它现在实际引用的那一份
-    static const char* sql = "UPDATE OR REPLACE image SET img_name = ?1 WHERE img_name = ?2;";
-    if (sqlite3_stmt* stmt = nullptr; sqlite3_prepare_v2(conn, sql, -1, &stmt, nullptr) == SQLITE_OK)
-    {
-        sqlite3_bind_text16(stmt, 1, to.c_str(), -1, SQLITE_TRANSIENT);
-        sqlite3_bind_text16(stmt, 2, from.c_str(), -1, SQLITE_TRANSIENT);
-        sqlite3_step(stmt);
-        sqlite3_finalize(stmt);
-    }
-}
