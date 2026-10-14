@@ -87,7 +87,7 @@ void WindowSite::close()
 	PostMessage(hwnd, WM_CLOSE, 0, 0);
 }
 
-void WindowSite::setParam(const JsonObject& params, JsonObject& result)
+void WindowSite::setParam(const JsonObject& params, const JsonObject& result)
 {
 	JsonObject args = Util::msgArgs(params);
 	std::wstring key = Util::argString(args, L"key");
@@ -110,7 +110,7 @@ void WindowSite::setParam(const JsonObject& params, JsonObject& result)
 	result.SetNamedValue(L"changed", JsonValue::CreateBooleanValue(changed));
 }
 
-void WindowSite::takeArticle(JsonObject& result)
+void WindowSite::takeArticle(const JsonObject& result)
 {
 	JsonObject article;
 	article.SetNamedValue(L"title", JsonValue::CreateStringValue(articleTitle));
@@ -120,13 +120,13 @@ void WindowSite::takeArticle(JsonObject& result)
 	result.SetNamedValue(L"result", article);
 }
 
-void WindowSite::markPublished(JsonObject& result)
+void WindowSite::markPublished(const JsonObject& result)
 {
 	published = true;
 	result.SetNamedValue(L"ok", JsonValue::CreateBooleanValue(true));
 }
 
-void WindowSite::isPublished(JsonObject& result)
+void WindowSite::isPublished(const JsonObject& result)
 {
 	// 值一律放在 result 下：DDMsg.invoke 只把回包里的 result 字段交给调用方（见 Msg.js 的 onMessage），
 	// 写在根上会被丢掉——published 拿回来永远是 false，"发完别再把人拽回编辑页"这条就一直不生效。

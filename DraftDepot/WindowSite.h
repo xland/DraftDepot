@@ -32,18 +32,26 @@ public:
 	/// 只投一个 WM_CLOSE 就返回——真正的销毁走窗口消息（onDestroy 里摘注册表、析构对象），
 	/// 调用方（PageSite 的消息回调）还站在自己的栈上，直接 DestroyWindow 等于把自己删了
 	void close();
-	/// args: { key, value }；站点脚本（如 WeiXin.js 抓到 token）回传参数，
-	/// 与已加载的 config 比对，不同才写回 site 表并更新内存；返回 { ok, changed }
-	void setParam(const JsonObject& params, JsonObject& result);
+	/**
+	 * args: { key, value }；站点脚本（如 WeiXin.js 抓到 token）回传参数，
+	 * 与已加载的 config 比对，不同才写回 site 表并更新内存；返回 { ok, changed }
+	 *
+	 * JsonObject 一律按 const& 传（本类与 PageSite 都一样）：它是 WinRT 对象的句柄（就一个指针），
+	 * 传引用省掉按值传那一对 AddRef/Release。const 不影响写回——投影里 SetNamedValue 是 const
+	 * 方法，写的是句柄背后那个对象，调用方手里那一份照样改到。
+	 * 要 const 而不是非 const 引用：非 const 唯一多出来的"让它改指到别的对象"对调用方是不可见的，
+	 * 加上 const，这种写法直接编译不过
+	 */
+	void setParam(const JsonObject& params, const JsonObject& result);
 	/**
 	 * 站点脚本（WeiXin.js 进到编辑器后）来取"待发布的文章"，返回 { title, html }。
 	 * 取过一次就清空：脚本每个文档（含页面自身刷新、跳转）都跑一遍，留着会被反复灌进编辑器。
 	 */
-	void takeArticle(JsonObject& result);
+	void takeArticle(const JsonObject& result);
 	/// args: 无；站点脚本把文章灌进对方编辑器之后调用，记下"这一轮已经发过了"，返回 { ok }
-	void markPublished(JsonObject& result);
+	void markPublished(const JsonObject& result);
 	/// args: 无；站点脚本在新文档里问本窗口这一轮是不是已经发过，返回 { published }
-	void isPublished(JsonObject& result);
+	void isPublished(const JsonObject& result);
 public:
 	HWND hwnd;
 	/// 站点类型，由前端 openSite 的 args.type 传入（如公众号 "WeiXin"、CSDN "CSDN"）

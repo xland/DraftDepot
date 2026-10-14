@@ -42,7 +42,7 @@ namespace
 	};
 }
 
-PageSite::PageSite(WindowSite* win, ComPtr<ICoreWebView2>& webview)
+PageSite::PageSite(WindowSite* win, const ComPtr<ICoreWebView2>& webview)
 	: win{ win }, webview{ webview }
 {
 	// 起始 URL 由本类按窗口的 type + 该站点存下来的配置算出来（见 buildStartUrl）。
@@ -153,7 +153,7 @@ HRESULT PageSite::onMsgReceived(ICoreWebView2* webview, ICoreWebView2WebMessageR
 	return S_OK;
 }
 
-void PageSite::handleGetImageDir(JsonObject& result)
+void PageSite::handleGetImageDir(const JsonObject& result)
 {
 	// 数据目录下的 images 子目录：与主窗口 Page::handleGetImageDir 是同一个目录，但这里只给 READ。
 	// 站点脚本只把图读出来传对方的图床，给它 READ_WRITE 等于让对方页面能在我们的图片目录里增删改写
@@ -187,7 +187,7 @@ void PageSite::handleGetImageDir(JsonObject& result)
 	webview->PostWebMessageAsJson(json.c_str());
 }
 
-void PageSite::handleGetCookie(JsonObject& param, JsonObject& result)
+void PageSite::handleGetCookie(const JsonObject& param, const JsonObject& result)
 {
 	JsonObject args = Util::msgArgs(param);
 
@@ -271,7 +271,7 @@ void PageSite::handleGetCookie(JsonObject& param, JsonObject& result)
 			}).Get());
 }
 
-void PageSite::handleGetImageUrl(JsonObject& param, JsonObject& result)
+void PageSite::handleGetImageUrl(const JsonObject& param, const JsonObject& result)
 {
 	JsonObject args = Util::msgArgs(param);
 	auto name = Util::argString(args, L"name");
@@ -285,7 +285,7 @@ void PageSite::handleGetImageUrl(JsonObject& param, JsonObject& result)
 	result.SetNamedValue(L"result", value);
 }
 
-void PageSite::handleSetImageUrl(JsonObject& param, JsonObject& result)
+void PageSite::handleSetImageUrl(const JsonObject& param, const JsonObject& result)
 {
 	JsonObject args = Util::msgArgs(param);
 	auto name = Util::argString(args, L"name");
@@ -293,7 +293,7 @@ void PageSite::handleSetImageUrl(JsonObject& param, JsonObject& result)
 	ImageSite::save(name, win->type, url);
 }
 
-void PageSite::handleNotice(JsonObject& param, JsonObject& result)
+void PageSite::handleNotice(const JsonObject& param, const JsonObject& result)
 {
 	JsonObject args = Util::msgArgs(param);
 	auto text = Util::argString(args, L"text");
@@ -322,7 +322,7 @@ HRESULT PageSite::onTitleChange(ICoreWebView2* sender, IUnknown* args)
 	return S_OK;
 }
 
-void PageSite::injectSiteScript(ComPtr<ICoreWebView2>& webview)
+void PageSite::injectSiteScript(const ComPtr<ICoreWebView2>& webview)
 {
 	// 站点脚本按窗口 type 同名取资源（Resource.rc 里以 RCDATA 挂进来，type "WeiXin" → WeiXin.js）；
 	// 没有对应资源的平台（type 为空，或还没写脚本）就不注入，site 窗口当普通浏览器用

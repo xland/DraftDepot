@@ -6,7 +6,7 @@ class Window;
 class Page
 {
 public:
-	Page(Window* win, ComPtr<ICoreWebView2>& webview);
+	Page(Window* win, const ComPtr<ICoreWebView2>& webview);
 	void emit(const JsonObject& eventData);
 private:
 	HRESULT onRequest(ICoreWebView2* webview, ICoreWebView2WebResourceRequestedEventArgs* args);
@@ -16,7 +16,7 @@ private:
 	HRESULT onCloseWindow(ICoreWebView2* sender, IUnknown* args);
 	std::wstring getContentType(const std::wstring& fileName);
 	HRESULT serveFileFromDataPath(ICoreWebView2WebResourceRequestedEventArgs* args, const std::wstring& resName);
-	void handleGetImageDir(JsonObject& result);
+	void handleGetImageDir(const JsonObject& result);
 private:
 	Window* win;
 	ComPtr<ICoreWebView2> webview;

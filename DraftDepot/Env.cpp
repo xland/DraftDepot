@@ -96,8 +96,6 @@ void Env::initDataPath()
     CoTaskMemFree(pathTmp);
     dataPath /= L"DraftDepot";
 
-    // 必须显式创建：sqlite3_open16 只会创建 db.db 文件，不会创建父目录；
-    // WebView2 虽然也会建 userDataFolder，但它排在 Db::init 之后，指望不上。
     std::error_code ec;
     std::filesystem::create_directories(dataPath, ec);
     if (ec) {

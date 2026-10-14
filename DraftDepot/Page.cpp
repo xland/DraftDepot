@@ -9,7 +9,7 @@
 #include <fstream>
 #include <filesystem>
 
-Page::Page(Window* win, ComPtr<ICoreWebView2>& webview) :win{ win }, webview{ webview }
+Page::Page(Window* win, const ComPtr<ICoreWebView2>& webview) :win{ win }, webview{ webview }
 {
     webview->AddWebResourceRequestedFilter(L"https://app.localhost/*", COREWEBVIEW2_WEB_RESOURCE_CONTEXT_ALL);
     auto resRequestedCB = Callback<ICoreWebView2WebResourceRequestedEventHandler>(this, &Page::onRequest);
@@ -306,7 +306,7 @@ HRESULT Page::serveFileFromDataPath(ICoreWebView2WebResourceRequestedEventArgs* 
     return S_OK;
 }
 
-void Page::handleGetImageDir(JsonObject& result)
+void Page::handleGetImageDir(const JsonObject& result)
 {
     // 只把图片子目录交给 JS：数据目录里还放着 SQLite 库和 WebView2 的用户数据，
     // 整个目录给 READ_WRITE 等于让前端能读写甚至删掉数据库
