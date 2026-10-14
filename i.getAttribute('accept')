@@ -1,9 +1,0 @@
-
-playwright-cli run-code [code]
-
-Run Playwright code snippet
-
-Arguments:
-  [code]                      a javascript function containing playwright code to execute. it will be invoked with a single argument, page, which you can use for any page interaction.
-Options:
-  --filename                  load code from the specified file.
