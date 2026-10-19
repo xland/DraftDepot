@@ -5,3 +5,4 @@
 # 生成物：由 UI/scripts/gen-dist-rc.mjs 从 UI/dist 生成，每次构建都可能变
 **/DraftDepot/dist.rc
 **/tmp/**
+**/playwright-cli/**

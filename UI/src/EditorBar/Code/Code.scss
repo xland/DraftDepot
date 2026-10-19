@@ -1,12 +1,14 @@
 /* 代码块编辑弹窗（挂到 body，居中显示）。
-   比链接弹窗大得多：要能一次看几十行代码，所以宽与高都固定，代码框本身不可拖拽改大小。 */
+   比链接弹窗大得多：要能一次看几十行代码，所以宽与高都固定，代码框本身不可拖拽改大小。
+   两行 max-* 是上限：窗口比它还窄或矮时随窗口缩，别把按钮顶到屏幕外面去。 */
 .codeDialog {
   position: fixed;
   left: 50%;
   top: 50%;
   transform: translate(-50%, -50%);
   z-index: 1002;
-  width: 560px;
+  width: 1120px;
+  max-width: calc(100vw - 32px);
   box-sizing: border-box;
   padding: 12px;
   background: #fff;
@@ -39,7 +41,8 @@
   .codeDialogInput {
     box-sizing: border-box;
     width: 100%;
-    height: 260px;
+    height: 520px;
+    max-height: calc(100vh - 120px); // 余下的给标题行与按钮行
     padding: 8px;
     border: 1px solid #c8cdd6;
     outline: none;

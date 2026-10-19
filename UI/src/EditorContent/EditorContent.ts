@@ -7,6 +7,7 @@ import { extractCodeBlocks, fillCodeBlocks, findCodeBlock, stripCodeBlocks } fro
 import { EditPlugin, HyperlinkPlugin, ImageEditPlugin, PastePlugin, ShortcutPlugin, WatermarkPlugin } from "roosterjs";
 import EditorPlugin from "./EditorPlugin";
 import ImagePlugin from "./ImagePlugin";
+import { installCopy } from "./Copy";
 
 class EditorContent extends CtrlBase {
   editor: Editor | null = null;
@@ -46,6 +47,8 @@ class EditorContent extends CtrlBase {
       // 设了它反而有害——roosterjs 的 FormatPlugin 会在每次输入时把默认格式刷成段落上的内联 style，
       // 于是每段都挂着同一串 style，还会盖掉 CSS 里的颜色；只有用户手动改过的样式才该写进 HTML
     });
+    // 复制：选区里有代码块时自己写剪贴板（rooster 的只读 entity 会被 Chromium 的默认复制漏掉，见 Copy.ts）
+    installCopy(this.dom);
     // 双击代码块 → 交给工具栏的 Code 弹层编辑；代码块是只读 entity，双击不会进文本编辑态
     this.dom.addEventListener("dblclick", (e) => {
       const found = findCodeBlock(e.target as Node);

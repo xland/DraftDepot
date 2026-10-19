@@ -20,8 +20,8 @@ import { DEFAULT_LANG, highlightCode, isCodeLang, type CodeLangId } from "../Cod
 /** entity 类型名；rooster 会在外壳上写 _EType_CodeBlock，靠它认代码块 */
 const ENTITY_TYPE = "CodeBlock";
 
-/** 编辑器里代码块外壳的选择器 */
-const WRAPPER_SELECTOR = '[class*="_EType_CodeBlock"]';
+/** 编辑器里代码块外壳的选择器（复制那套也要认它，见 Copy.ts） */
+export const WRAPPER_SELECTOR = '[class*="_EType_CodeBlock"]';
 
 /** 入库形态里的代码块：<pre><code data-lang="ts">纯文本</code></pre> */
 const STORED_CODE_SELECTOR = "code[data-lang]";

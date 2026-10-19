@@ -14,7 +14,9 @@ import { isCodeLang } from "../CodeHighlight";
  *      收在 Msg.js 的 uploadMarkdownImages 里）。宽高要带上：发布传的是原图（编辑器里拖过的
  *      只是显示尺寸，不另存文件），不带的话对方就按原图大小显示了。Markdown 的图片语法带不上
  *      尺寸，所以拖过的那张改写内联 HTML 的 <img width height>（GFM 认内联 HTML，几家都吃）；
- *      没拖过的仍是 ![](src)，用不着多这一串；
+ *      没拖过的仍是 ![](src)，用不着多这一串。
+ *      个别写作页不认 <img>（实测 51CTO 把 <img> 当字面文本带过去，图片就丢了）——这种情况由
+ *      调用方传 options.inlineImages = false，强制走 ![](src) 不带尺寸；
  *   3. 装饰性样式（文字色 / 背景色 / 字体 / 字号 / 行高 / 对齐）**一律丢掉**：Markdown 没这套语法，
  *      留着只能写成内联 HTML，而那边多半也不会认；
  *   4. 下划线与上/下标 → 保留成内联 HTML（<u> / <sup> / <sub>）：这几个在中文技术文里真会用到，
@@ -97,14 +99,24 @@ function imageSize(el: Element): { width: number; height: number } {
 }
 
 /**
+ * 当前这次 toMarkdown 是否允许把图片写成内联 HTML <img>。
+ * 默认 true（见 toMarkdown）；个别平台（51CTO）会把它当字面文本，传 false 关掉，
+ * 这样图片一律走 ![](src) 不带尺寸——不是它要的"宽高跟过去"，而是"至少别把图丢了"。
+ * 用模块级变量而不是再穿几层参数，是 renderImage 离 toMarkdown 入口还隔着 renderInlineNode
+ * 等好几个函数，全签上穿过去太啰嗦；toMarkdown 是同步单次调用，不存在半路换值的问题
+ */
+let inlineImages = true;
+
+/**
  * 图片：默认是 ![alt](src)（alt 里的方括号会撑破 Markdown 语法，去掉）；
- * 拖过尺寸的那张要连宽高一起过去，而 Markdown 的图片语法带不上尺寸，改写成内联 HTML 的 <img>
+ * 拖过尺寸且 inlineImages 开着的那张要连宽高一起过去，而 Markdown 的图片语法带不上尺寸，
+ * 改写成内联 HTML 的 <img>
  */
 function renderImage(el: Element): string {
   const src = el.getAttribute("src") ?? "";
   const alt = el.getAttribute("alt") ?? "";
   const { width, height } = imageSize(el);
-  if (!width || !height) return `![${alt.replace(/[[\]]/g, "")}](${src})`;
+  if (!inlineImages || !width || !height) return `![${alt.replace(/[[\]]/g, "")}](${src})`;
   return `<img src="${escapeAttr(src)}" alt="${escapeAttr(alt)}" width="${width}" height="${height}">`;
 }
 
@@ -270,7 +282,17 @@ function renderBlocks(node: Node): string[] {
   return lines;
 }
 
-export default function toMarkdown(html: string): string {
+/** 转换选项 */
+export interface ToMarkdownOptions {
+  /**
+   * 图片能否写成内联 HTML <img>（带尺寸的那种）。默认 true——绝大多数 Markdown 编辑器
+   * 都认 GFM 内联 HTML（见 Markdown.ts 文件头注释）。个别平台不认（51CTO），传 false 把它关掉。
+   */
+  inlineImages?: boolean;
+}
+
+export default function toMarkdown(html: string, options: ToMarkdownOptions = {}): string {
+  inlineImages = options.inlineImages ?? true;
   const doc = new DOMParser().parseFromString(html, "text/html");
   const lines = renderBlocks(doc.body).map((line) => line.trimEnd());
   // 块间空一行；连续空行压成一个（空段落与引用里的空行会攒出多余空行）

@@ -4,8 +4,37 @@ import codeSvg from "../icon/code.svg?raw";
 import CtrlBase from "../../CtrlBase";
 import Msg from "../../Msg";
 import EditorContent from "../../EditorContent/EditorContent";
-import { CODE_LANGS, DEFAULT_LANG, type CodeLangId } from "../../CodeHighlight";
+import { CODE_LANGS, DEFAULT_LANG, isCodeLang, type CodeLangId } from "../../CodeHighlight";
 import { codeOf, insertCodeBlock, updateCodeBlock } from "../../EditorContent/CodeBlock";
+
+/**
+ * 上次选的语言存在站点数据里（localStorage）——它只是个界面偏好，不值得进 SQLite。
+ * 注意 Debug（http://localhost:5173）与发布（https://app.localhost，见 Page.cpp）是两个源，
+ * localStorage 同源隔离，两边各记各的，互不影响。
+ */
+const LANG_KEY = "editor.codeLang";
+
+/**
+ * 读上次的语言：localStorage 可能被禁（隐私模式、WebView2 的站点数据策略），
+ * 读不到或存的是认不出的值就退回默认语言——记住不了不该妨碍插入代码
+ */
+function savedLang(): CodeLangId {
+  try {
+    const value = localStorage.getItem(LANG_KEY) ?? undefined;
+    return isCodeLang(value) ? value : DEFAULT_LANG;
+  } catch {
+    return DEFAULT_LANG;
+  }
+}
+
+/** 记住这次的语言；同样，存不下就算了 */
+function rememberLang(lang: CodeLangId): void {
+  try {
+    localStorage.setItem(LANG_KEY, lang);
+  } catch {
+    /* 下次还从默认语言开始，不影响使用 */
+  }
+}
 
 /**
  * 插入 / 编辑代码块按钮（模块单例）。
@@ -74,15 +103,15 @@ class Code extends CtrlBase {
     Msg.on("editCodeBlock", (data) => this.openForEdit((data as { wrapper: HTMLElement }).wrapper));
   }
 
-  /** 工具栏按钮：插入新的 */
+  /** 工具栏按钮：插入新的；语言沿用上次选的 */
   private openForInsert(): void {
     this.editing = null;
     this.input.value = "";
-    this.lang.value = DEFAULT_LANG;
+    this.lang.value = savedLang();
     this.show();
   }
 
-  /** 双击已有代码块：带出它现在的代码与语言 */
+  /** 双击已有代码块：带出它现在的代码与语言（照它自己的来，不从上次选的取） */
   private openForEdit(wrapper: HTMLElement): void {
     const { code, lang } = codeOf(wrapper);
     this.editing = wrapper;
@@ -121,6 +150,7 @@ class Code extends CtrlBase {
     const wrapper = this.editing;
     this.close();
     if (!code) return;
+    rememberLang(lang); // 真用了才算数：空着点确定不改上次的选择
 
     const editor = EditorContent.editor;
     // 弹窗抢走了焦点，先还给编辑器：insertEntity 要按光标位置插

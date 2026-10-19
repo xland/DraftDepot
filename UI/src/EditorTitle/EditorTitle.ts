@@ -53,6 +53,14 @@ const markdownSites = new Set([
 ]);
 
 /**
+ * markdownSites 里再扣一个"图片不许用内联 <img>"的——51CTO 的写作页把 <img> 当字面文本
+ * 带过去，图片就丢了（实测）。不在 markdownSites 里再细分的原因：这套名单只在"要不要走
+ * toMarkdown"这一处用，给它再加一个子集只会让逻辑更绕。这里列出来的平台只要看名字就知道
+ * 谁要这个开关（51CTO，写作页就是这毛病）
+ */
+const markdownSitesWithoutInlineImage = new Set(["51CTO"]);
+
+/**
  * 富文本站点里需要在前端先收拾一次正文的：只有微信——代码块着色必须在前端做完（见上面说明）。
  */
 const htmlSiteConverters: Record<string, (html: string) => string> = {
@@ -92,10 +100,19 @@ class EditorTitle extends CtrlBase {
         // 两个窗口是各自独立的 WebView2，互相看不见，内容只能靠 native 中转。
         // 大多数站点给原始正文，形态收拾由对方页面上的站点脚本做（见 markdownSites 的说明）
         const htmlConvert = htmlSiteConverters[target.type];
+        let html: string;
+        if (htmlConvert) {
+          html = htmlConvert(content);
+        } else if (markdownSites.has(target.type)) {
+          // Markdown 站点：51CTO 写作页不认 <img>，强制走 ![](src)，代价是图按原图大小显示
+          html = await toMarkdown(content, { inlineImages: !markdownSitesWithoutInlineImage.has(target.type) });
+        } else {
+          html = content;
+        }
         Msg.invoke("openSite", {
           type: target.type,
           title: this.input.value,
-          html: htmlConvert ? htmlConvert(content) : markdownSites.has(target.type) ? await toMarkdown(content) : content,
+          html,
         });
       });
     }
