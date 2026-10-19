@@ -234,6 +234,13 @@ const FONT_SIZE = "14px";
 /** 行高：倍数，明显大于字号 */
 const LINE_HEIGHT = "1.75";
 
+/**
+ * 段落下外边距。写死而不是沿用编辑器的：微信自己的段落间距跟我们这份正文（字号 14px、
+ * 行高 1.75）不是一个量级，段落之间要么挤在一起要么空一大块，这里统一钉一个值。
+ * 0px = 段落紧挨着；要拉开距离就把值调大（如 "1em"）
+ */
+const PARAGRAPH_MARGIN_BOTTOM = "0px";
+
 /** 标题字号：沿用编辑器 #editorContent 里的级差（EditorContent.scss），免得落到微信的默认字号上 */
 const HEADING_FONT_SIZE = {
   H1: "28px",
@@ -260,7 +267,8 @@ const AS_IS = new Set(["IMG", "BR", "HR"]);
 const BLOCK_TAGS = new Set([...AS_P, ...AS_CONTAINER, ...AS_CELL, ...Object.keys(HEADING_FONT_SIZE)]);
 
 /**
- * 清掉外边距：微信自己的段落间距够用，p 上带 margin 会跟它的排版打架。
+ * 清掉外边距：段落要用的下边距由 PARAGRAPH_MARGIN_BOTTOM 统一钉（见 convertParagraph），
+ * 原样式里带来的 margin 各不相同，不清会叠出大小不一的间距。
  * 长写法（margin-top 之类）也一起清，免得只清了简写留下残余
  */
 function clearMargin(el) {
@@ -328,7 +336,8 @@ function convertParagraph(el, children) {
   // 原段落的对齐 / 缩进等样式先整条带过来，再由下面几行压上字号、行高与对齐（后写的覆盖先拷来的）
   const style = el.getAttribute("style");
   if (style) block.setAttribute("style", style);
-  clearMargin(block); // 原段落样式里带来的 margin 也一并去掉
+  clearMargin(block); // 原段落样式里带来的 margin 清掉，再由下面统一钉一个下边距
+  if (block.tagName === "P") block.style.marginBottom = PARAGRAPH_MARGIN_BOTTOM;
   block.style.fontSize = HEADING_FONT_SIZE[tag] || FONT_SIZE;
   block.style.lineHeight = LINE_HEIGHT;
   // 对齐自己说了算：上面拷过来的原样式里可能是居中或两端对齐，这里一律钉回左对齐
@@ -407,6 +416,7 @@ function forWeiXin(html) {
     p.style.fontSize = FONT_SIZE;
     p.style.lineHeight = LINE_HEIGHT;
     p.style.textAlign = "left"; // 与 convertParagraph 一致：这里补出来的段落同样左对齐
+    p.style.marginBottom = PARAGRAPH_MARGIN_BOTTOM;
     pending.forEach((child) => p.appendChild(child));
     root.appendChild(p);
     pending = [];
