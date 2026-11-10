@@ -29,7 +29,7 @@ const UNTITLED = "【未命名】";
  * 面板即 #articleTitle 自身，由 ContentBox 挂到中间分栏槽位。
  * 内部先挂 Header 标题栏，再挂内容区（吃掉标题栏之外的高度并负责滚动），列表挂进内容区；
  * 启动时通过 Msg 请求原生侧读取文章标题并渲染成列表；
- * 选中分类后由 Category 调 setCategoryFilter()，只加载该分类（含子分类）的文章，
+ * 选中分类后由 Category 调 setCategoryFilter()，只加载该分类名下的文章（单层目录，没有子分类），
  * 没选中任何分类则加载全部。这一版不做分页。
  *
  * 顺带管着"当前编辑的是哪一篇"：

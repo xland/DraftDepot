@@ -42,7 +42,13 @@ class EditorContent extends CtrlBase {
       // span 才写得下这个颜色，于是纯文本平白被包成 <span style="color: rgb(0, 0, 0);">。
       // 换成 asPlainText 就不走那一段，段格式是空的，那个没有属性的 span 会被它自己优化掉，
       // 粘进来的就是纯文本。有 HTML 的照旧按原格式粘（Word/网页复制来的那些还需要它）
-      defaultPasteType: (_doc, clipboardData) => (clipboardData.rawHtml ? "normal" : "asPlainText"),
+      //
+      // 图片必须走 normal —— 剪贴板里是一张图时，text 与 rawHtml 都是空的，按上面那条会落到
+      // asPlainText，而 roosterjs 组粘贴内容是 roosterjs-content-model-dom 的 createPasteFragment：
+      // 图片那一支的条件是 pasteType == 'asImage' || pasteType != 'asPlainText'，asPlainText 正好把
+      // 图片排除掉，最后产出一个空 fragment——表现就是"Ctrl+V 粘不进图"（文本照旧能粘）
+      defaultPasteType: (_doc, clipboardData) =>
+        clipboardData.imageDataUri || clipboardData.image || clipboardData.rawHtml ? "normal" : "asPlainText",
       // 不设 defaultSegmentFormat：默认字体/字号/颜色交给 #editorContent 的 CSS（见 EditorContent.scss）。
       // 设了它反而有害——roosterjs 的 FormatPlugin 会在每次输入时把默认格式刷成段落上的内联 style，
       // 于是每段都挂着同一串 style，还会盖掉 CSS 里的颜色；只有用户手动改过的样式才该写进 HTML

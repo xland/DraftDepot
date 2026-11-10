@@ -12,16 +12,10 @@ JsonArray Article::loadTitles(sqlite3_int64 categoryId)
     // 用 id 倒序兜住，保证后来的一定更靠前
     static const char* sqlAll =
         "SELECT id, title, category_id, updated_at FROM article ORDER BY updated_at DESC, id DESC;";
-    // 按分类过滤时连子分类一起算：递归取出该分类及其所有后代，
-    // 这样选中父分类（如“开发”）也能看到“C++”下的文章
+    // 按分类过滤：单层结构，等值查这个分类名下的文章即可（不再需要递归 CTE）
     static const char* sqlByCategory =
-        "WITH RECURSIVE sub(id) AS ("
-        "  SELECT id FROM category WHERE id = ?1"
-        "  UNION ALL"
-        "  SELECT c.id FROM category c JOIN sub s ON c.parent_id = s.id"
-        ")"
         "SELECT id, title, category_id, updated_at FROM article"
-        " WHERE category_id IN (SELECT id FROM sub)"
+        " WHERE category_id = ?1"
         " ORDER BY updated_at DESC, id DESC;";
 
     sqlite3_stmt* stmt = nullptr;

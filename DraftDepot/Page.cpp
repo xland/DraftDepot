@@ -129,7 +129,7 @@ HRESULT Page::onMsgReceived(ICoreWebView2* webview, ICoreWebView2WebMessageRecei
         result.SetNamedValue(L"result", payload);
     }
     else if (method == L"addCategory") {
-        // args: { name, parentId? }；parentId 省略或 null 表示建顶层分类。
+        // args: { name }；单层目录，一律建顶层分类。旧前端若仍带 parentId 会被 Category::add 忽略。
         // 返回 { id }：前端拿它选中刚建好的分类
         JsonObject args = Util::msgArgs(param);
         JsonObject payload;
@@ -154,7 +154,7 @@ HRESULT Page::onMsgReceived(ICoreWebView2* webview, ICoreWebView2WebMessageRecei
         result.SetNamedValue(L"result", payload);
     }
     else if (method == L"removeCategory") {
-        // args: { id }；只删空分类：有子分类、或子树下挂着文章的会被挡回来，
+        // args: { id }；只删空分类：名下挂着文章的会被挡回来，
         // 原因在 reason 里，前端直接弹给用户（见 Category::remove）
         JsonObject args = Util::msgArgs(param);
         std::wstring reason;

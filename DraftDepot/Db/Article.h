@@ -16,7 +16,7 @@ public:
 	/// 读取文章标题（不查正文），按修改时间倒序（同一秒写的多篇再按 id 倒序）：最近改过的在最上面，
 	/// 新建一篇后不需要重新查就能知道它排第一（它的 updated_at 就是当时）
 	/// 每项：{ "id": <int>, "title": <string>, "categoryId": <int|null>, "updatedAt": "YYYY-MM-DD HH:MM:SS" }
-	/// categoryId < 0 表示不过滤；否则连子分类一起算（选中父分类也能看到其下文章）
+	/// categoryId < 0 表示不过滤；否则只取该分类名下的文章（单层目录，不存在子分类）
 	static JsonArray loadTitles(sqlite3_int64 categoryId);
 	/// 读取单篇文章（含正文）；id 不存在时返回空 JsonObject（调用方按 HasKey(L"id") 判断）
 	/// 返回：{ "id": <int>, "title": <string>, "content": <string>, "categoryId": <int|null>, "updatedAt": <string> }

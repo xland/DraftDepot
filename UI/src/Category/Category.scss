@@ -11,9 +11,9 @@
   flex-direction: column;
 }
 
-/* 分类树的内容区：整块的重活都在这——高度是标题栏之外的全部剩余空间，内容超出才在这里出滚动条。
+/* 分类列表的内容区：高度是标题栏之外的全部剩余空间，内容超出才在这里出滚动条。
    flex: 1 1 auto 让它吃掉剩余高度；min-height: 0 是关键前提（没有它 flex 项会以内容高度为准、
-   把面板顶破，滚动条就跑到面板外去了）。横向也允许滚：树缩进深时不至于被裁掉。 */
+   把面板顶破，滚动条就跑到面板外去了）。单层列表不会再缩进出横向滚动条，规则留着兜底。 */
 .categoryContent {
   flex: 1 1 auto;
   min-height: 0;
@@ -23,95 +23,22 @@
 
 /* 标题栏（#categoryHeader / #categoryTitle / #addCategoryBtn）的样式在 Header/Header.scss */
 
+/* 单层分类列表：没有树形缩进、层级虚线、展开/折叠图标态 */
 .categoryTree {
   list-style: none;
   margin: 0;
   padding: 6px 0;
 }
 
-/* 树形虚线的颜色。
-   图标是字体字形，笔画被抗锯齿稀释，同一个色值看上去会比 1px 实线浅，
-   所以虚线取一个略浅的值，让虚线和图标在观感上一致。要调线色只改这一个变量。 */
-$line-color: #aab0b7;
-
-/* 树形虚线的层级连接。三条线各司其职，改任何一个都要连着看另外两个：
-   --dd            一列的横向缩进量（每级缩进，也是父纵线到本节点 label 左缘的距离）
-   --icon-size     展开/折叠图标位宽度（= 图标字号 + 左右各 1px 字形留白）
-   --icon-half     图标位的一半。图标压在 label 左缘上、左半探进缩进列，
-                   于是图标左边缘正好是横向虚线的终点，同级图标也上下对齐成一列
-   --label-height  标签行高，用于把横向虚线对中到文字垂直中心 */
 .categoryNode {
-  --dd: 18px;
-  --icon-size: 13px;
-  --icon-half: 6.5px;
   --label-height: 24px;
+  --icon-size: 13px;
 
-  position: relative;
   list-style: none;
-  padding-left: var(--dd);
+  padding-left: 6px;
 }
 
-/* 纵向虚线：一条线只服务于“一组兄弟节点”。
-   它落在每个兄弟的左缘（= 父节点图标所在的列 = 各兄弟横线的起点），
-   从父节点图标处起、到这一组最后一个兄弟的横线止；不穿过任何图标。
-   例外是顶层：顶层父节点之间要始终连着（展开与否都连），所以顶层那一条会一路贯下来，
-   中间经过的子节点竖线也跟着整列贯下去。 */
-.categoryNode::before {
-  content: "";
-  position: absolute;
-  left: 0;
-  top: 0;
-  bottom: 0;
-  border-left: 1px dashed $line-color;
-  pointer-events: none;
-}
-
-/* 组里最后一个兄弟：竖线到自己的横线为止，不再往下多拖一截 */
-.categoryNode:last-child::before {
-  bottom: auto;
-  height: calc(var(--label-height) / 2);
-}
-
-/* 顶层父节点的子节点是顶层那条主干的一环，得整列贯下来，
-   否则顶层父节点之间就接不上（这条选择器同时也是对上面“最后一个兄弟”的覆盖） */
-.categoryTree > .categoryNode > .categoryChildren > .categoryNode::before {
-  bottom: 0;
-  height: auto;
-}
-
-/* 主干的最末端：仍然收在自己那条横线上，不拖尾巴 */
-.categoryTree > .categoryNode:last-child > .categoryChildren > .categoryNode:last-child::before {
-  bottom: auto;
-  height: calc(var(--label-height) / 2);
-}
-
-/* 横向虚线：从本节点左缘（上级纵线所在列）横到图标左边缘。
-   长度是 --dd 减去图标左半，终点正好落在图标左边缘，与图标紧贴；
-   纵向定位在标签高度一半处，与图标垂直中心同线。 */
-.categoryNode::after {
-  content: "";
-  position: absolute;
-  left: 0;
-  top: calc(var(--label-height) / 2);
-  width: calc(var(--dd) - var(--icon-half));
-  border-bottom: 1px dashed $line-color;
-  pointer-events: none;
-}
-
-/* 顶层分类没有上级，不画横向虚线 */
-.categoryTree > .categoryNode::after {
-  display: none;
-}
-
-/* 顶层节点上面没有更外层的纵线，所以不用 ::before 在左缘再画一条 */
-.categoryTree > .categoryNode::before {
-  border-left: none;
-}
-
-/* 标签行 = 图标位 + 名称。
-   图标压在 label 左缘上（左侧一半探进缩进列），所以图标中心正好落在本级竖线的 x 上、
-   横向虚线末端也正好接到图标左边缘。
-   图标框本身不画线，需要连图标时用图标上/下那两小段（见下面的 ::before / ::after）。 */
+/* 标签行 = 图标位 + 名称 */
 .categoryLabel {
   position: relative;
   display: flex;
@@ -123,61 +50,8 @@ $line-color: #aab0b7;
   white-space: nowrap;
 }
 
-/* 展开的父节点：图标下方接一小段，连到第一个子节点。
-   子节点的 ::before 从自己整行顶开始，所以这一段一接上就通到第一个子节点的横线。
-   折叠时子节点已经收起来，这一段就没东西可接了，不画（见下面的 .collapsed 规则） */
-.categoryNode.hasChildren:not(.collapsed) > .categoryLabel::after {
-  content: "";
-  position: absolute;
-  left: 0;
-  bottom: 0;
-  width: 0;
-  height: calc((var(--label-height) - var(--icon-size)) / 2);
-  border-left: 1px dashed $line-color;
-  pointer-events: none;
-}
-
-/* 顶层父节点之间始终相连：图标上下各一小段，无论是否展开都画。
-   收起时两段 + 相邻两行贴着，直接连成一条线；展开时中间由子节点的竖线接上 */
-.categoryTree > .categoryNode > .categoryLabel::before,
-.categoryTree > .categoryNode > .categoryLabel::after {
-  content: "";
-  position: absolute;
-  left: 0;
-  width: 0;
-  height: calc((var(--label-height) - var(--icon-size)) / 2);
-  border-left: 1px dashed $line-color;
-  pointer-events: none;
-}
-
-.categoryTree > .categoryNode > .categoryLabel::before {
-  top: 0;
-}
-
-.categoryTree > .categoryNode > .categoryLabel::after {
-  bottom: 0;
-}
-
-/* 第一个顶层节点上面没有线可接，不画上段 */
-.categoryTree > .categoryNode:first-child > .categoryLabel::before {
-  display: none;
-}
-
-/* 最后一个顶层节点下面已经没有别的顶层节点了，下段只在“展开、接自己子节点”时才需要；
-   它折叠起来、或者本来就是叶节点时，这一段就成了悬空残段，不画。 */
-.categoryTree > .categoryNode:last-child.collapsed > .categoryLabel::after,
-.categoryTree > .categoryNode:last-child:not(.hasChildren) > .categoryLabel::after {
-  display: none;
-}
-
-/* 展开/折叠图标位（方框内 +/−，字形由 Category.ts 决定）。
-   负的左外边距把图标位整体左移半个宽度，使图标中心落在 label 左缘的 x 上
-   （也就是本级竖线所在的那一列），横向虚线末端正好接到图标左边缘。
-   宽度固定且每行都渲染（叶节点的减号是分支终点），同级名称左缘才能对齐。
-   高度撑满行高、内容居中，使图标垂直中心与横向虚线同线。
-   font-size 就是图标大小（13px 的图标位 = 11px 字形 + 左右各 1px 留白）；
-   用两段选择器而不是单类，是为了盖过 iconfont.css 里 .icon 的 16px 字号。
-   margin-right 是图标与 hover 底色左边界之间的距离，底色再往左就会贴上图标。 */
+/* 固定的分类图标位（方框内减号）：只是列表装饰，不再可点、不再切换 +/−。
+   font-size 用两段选择器盖过 iconfont.css 里 .icon 的 16px 字号。 */
 .categoryLabel .categoryToggle {
   flex: 0 0 auto;
   display: flex;
@@ -185,18 +59,10 @@ $line-color: #aab0b7;
   justify-content: center;
   width: var(--icon-size);
   height: 100%;
-  margin-left: calc(var(--icon-half) * -1);
   margin-right: 2px;
   font-size: 11px;
   line-height: 1;
-  /* 图标色，比虚线略深，抵消字形抗锯齿带来的变浅 */
   color: #9aa1a9;
-}
-
-/* 只有真的带子分类（可点展开/收起）的节点才给 hover 反馈；
-   叶节点的减号只是分支终点，不可点，不变色 */
-.categoryNode.hasChildren > .categoryLabel > .categoryToggle:hover {
-  color: #0069cc;
 }
 
 .categoryLabel.selected .categoryToggle {
@@ -204,9 +70,7 @@ $line-color: #aab0b7;
 }
 
 /* 名称：flex 子项撑满剩余宽度并允许收缩，min-width:0 + overflow 才能让省略号生效。
-   高度和行高都取整行高：底色只铺在名称自己身上，行高范围内填满，文字仍然垂直居中。
-   padding-left 是文字与底色左边界之间的左边距：底色从图标右侧 2px 起铺，
-   文字再往里缩 6px，于是 hover 时文字不会贴着底色左边缘。 */
+   高度和行高都取整行高：底色只铺在名称自己身上，行高范围内填满，文字仍然垂直居中。 */
 .categoryName {
   flex: 1 1 auto;
   min-width: 0;
@@ -218,8 +82,7 @@ $line-color: #aab0b7;
   white-space: nowrap;
 }
 
-/* hover 底色只铺在名称上，不铺满整个 label：图标左半在缩进列、右半在 label 内，
-   底色铺到 label 上就会盖住图标右半边 */
+/* hover 底色只铺在名称上，不铺满整个 label */
 .categoryLabel:hover .categoryName {
   background: #e8ecf4;
 }
@@ -230,14 +93,4 @@ $line-color: #aab0b7;
 
 .categoryLabel.selected .categoryName {
   background: #d3e3fd;
-}
-
-.categoryChildren {
-  list-style: none;
-  margin: 0;
-  padding: 0; /* 缩进由节点自身 padding-left 提供，保证与父纵线一列对齐 */
-}
-
-.categoryNode.collapsed > .categoryChildren {
-  display: none;
 }

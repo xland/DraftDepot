@@ -2,7 +2,11 @@
 #include "Category.h"
 #include "Article.h"
 #include "../Env.h"
+#include <chrono>
 #include <cstring>
+#include <filesystem>
+#include <iomanip>
+#include <sstream>
 
 namespace
 {
@@ -20,8 +24,10 @@ namespace
     void createSchema()
     {
         static const char* schemaSql[] = {
-            // ========== 文章分类（一对多的“一”端，支持多级树形） ==========
-            // parent_id 为 NULL 表示顶层分类；同层用 sort_order 排序
+            // ========== 文章分类（一对多的“一”端，只有一层） ==========
+            // parent_id 是为兼容老库保留的废弃列，此后恒为 NULL（新库也照旧建，
+            // 保证新老库 schema 一致）：老库已有这张表，DROP COLUMN / 重建表的风险
+            // 远大于留一个不用的列。单层下顺序只看 sort_order（全局 0..N-1）
             "CREATE TABLE IF NOT EXISTS category ("
             "  id          INTEGER PRIMARY KEY AUTOINCREMENT,"
             "  name        TEXT    NOT NULL,"
@@ -105,8 +111,8 @@ namespace
 
     /// 外键约束默认是关闭的：不显式打开，建表时写的 ON DELETE CASCADE / SET NULL 全是摆设。
     /// 这个开关不是写进库文件的持久属性，每条连接都必须设一次，且要设在事务之外。
-    /// 打开之后两件事由 SQLite 兜住：删分类时它的子孙被 CASCADE 连带删掉；
-    /// 删文章时它在 image 表里的记录被连带删掉，不用调用方自己记着收拾。
+    /// 打开之后由 SQLite 兜住：删文章时它在 image 表里的记录被连带删掉，不用调用方自己记着收拾。
+    /// （category 的 parent_id 自引用外键还在，但单层结构下它恒为 NULL，不再有连带删除）
     void enableForeignKeys()
     {
         if (sqlite3_exec(conn, "PRAGMA foreign_keys = ON;", nullptr, nullptr, nullptr) != SQLITE_OK)
@@ -122,6 +128,108 @@ namespace
             sqlite3_finalize(stmt);
         }
         if (!on) fatal(L"SQLite 未启用外键支持\n\n这一版 sqlite3 可能是在关闭外键的情况下编译的");
+    }
+
+    /// 数据升级出问题时只提示、不结束进程：迁移失败会回滚，老库原封不动，
+    /// 而新代码读分类是全表平铺、并不依赖 parent_id，程序照常能用
+    void warn(const std::wstring& detail)
+    {
+        auto msg = std::wstring{ L"文章目录升级提示\n\n" } + detail;
+        MessageBox(nullptr, msg.c_str(), L"系统提示", MB_OK | MB_ICONWARNING);
+    }
+
+    /// user_version：0 = 老版本（可能有多级分类），1 = 已经是单层结构。
+    /// 这是 SQLite 写在库文件头里的持久标记，比自建 meta 表省事，也不会被 createSchema 重建
+    int userVersion()
+    {
+        sqlite3_stmt* stmt = nullptr;
+        int version = 0;
+        if (sqlite3_prepare_v2(conn, "PRAGMA user_version;", -1, &stmt, nullptr) == SQLITE_OK)
+        {
+            if (sqlite3_step(stmt) == SQLITE_ROW) version = sqlite3_column_int(stmt, 0);
+            sqlite3_finalize(stmt);
+        }
+        return version;
+    }
+
+    /**
+     * 一次性迁移：把老库里可能存在的多级分类压平成单层。
+     * 详细理由与逐条 SQL 见 Db/migrate_flat_categories.sql（两处语句必须保持一致）。
+     *
+     * 保全数据的关键：只 UPDATE category 自己这几列，不删任何分类行、不动 article 一行、
+     * 不重编 id、不重建表。于是文章原先归在哪个分类就还在哪个分类，
+     * 外键 ON DELETE CASCADE / SET NULL 连触发的机会都没有。
+     */
+    void migrateToFlatCategories()
+    {
+        constexpr int FLAT_SCHEMA_VERSION = 1;
+        if (userVersion() >= FLAT_SCHEMA_VERSION) return;
+
+        // 分类表是空的（新库，或用户本来就删光了分类）：没有层级可压，打上标记即可，也不必备份
+        sqlite3_stmt* stmt = nullptr;
+        sqlite3_int64 count = 0;
+        if (sqlite3_prepare_v2(conn, "SELECT COUNT(*) FROM category;", -1, &stmt, nullptr) != SQLITE_OK)
+        {
+            warn(L"没能确认现有分类数量，已跳过本次升级；原数据未改动。");
+            return;
+        }
+        if (sqlite3_step(stmt) == SQLITE_ROW) count = sqlite3_column_int64(stmt, 0);
+        sqlite3_finalize(stmt);
+        if (count == 0)
+        {
+            sqlite3_exec(conn, "PRAGMA user_version = 1;", nullptr, nullptr, nullptr);
+            return;
+        }
+
+        // 整库备份：出任何问题都能把这一个文件复制回去，不必依赖事务日志
+        auto dbPath = Env::getDataPath() / L"db.db";
+        auto now = std::chrono::system_clock::to_time_t(std::chrono::system_clock::now());
+        std::tm local{};
+        localtime_s(&local, &now);
+        std::wostringstream stamp;
+        stamp << std::put_time(&local, L"%Y%m%d-%H%M%S");
+        auto backup = dbPath;
+        backup += L".bak-" + stamp.str();
+        std::error_code ec;
+        std::filesystem::copy_file(dbPath, backup, std::filesystem::copy_options::none, ec);
+        if (ec)
+        {
+            // 备份不了就不冒险改数据：留着多级结构，新代码照样能把它们当成一层显示
+            warn(L"升级前备份数据库失败，为安全起见本次不改动数据。\n\n"
+                + backup.wstring() + L"\n\nerror_code = " + std::to_wstring(ec.value()));
+            return;
+        }
+
+        // 与 Db/migrate_flat_categories.sql 完全一致的语句，改一处要同步改另一处。
+        // 放在 enableForeignKeys() 之前跑：这组 UPDATE 不触发外键，且省去事务内外开关 PRAGMA 的麻烦
+        static const char* migrationSql[] = {
+            "BEGIN IMMEDIATE;",
+            // 先按旧版 load() 的树展开顺序全局重排；CASE 保证重复执行时按当前 sort_order 原样写回
+            "WITH ordered AS ("
+            " SELECT id, ROW_NUMBER() OVER ("
+            "  ORDER BY CASE WHEN (SELECT COUNT(*) FROM category WHERE parent_id IS NOT NULL) > 0"
+            "   THEN COALESCE(parent_id, id) ELSE 0 END, sort_order, id) - 1 AS n"
+            " FROM category)"
+            "UPDATE category SET sort_order = (SELECT n FROM ordered WHERE ordered.id = category.id);",
+            "UPDATE category SET parent_id = NULL WHERE parent_id IS NOT NULL;",
+            // 不同父下的同名分类平铺后会分不清：同名里 id 最小的留原名，其余加 " (id)"
+            "WITH ranked AS ("
+            " SELECT id, ROW_NUMBER() OVER (PARTITION BY name ORDER BY id) AS rn FROM category)"
+            "UPDATE category SET name = name || ' (' || id || ')'"
+            " WHERE id IN (SELECT id FROM ranked WHERE rn > 1);",
+            "PRAGMA user_version = 1;",
+            "COMMIT;",
+        };
+
+        for (const char* sql : migrationSql)
+        {
+            if (sqlite3_exec(conn, sql, nullptr, nullptr, nullptr) == SQLITE_OK) continue;
+            auto detail = std::wstring{ static_cast<const wchar_t*>(sqlite3_errmsg16(conn)) };
+            sqlite3_exec(conn, "ROLLBACK;", nullptr, nullptr, nullptr);
+            warn(L"文章目录升级失败，已回滚，原数据未改动。\n\n备份：\n" + backup.wstring()
+                + L"\n\n" + detail);
+            return;
+        }
     }
 
     void open()
@@ -143,6 +251,9 @@ namespace
         }
 
         createSchema();
+        // 老库的多级分类在这里压平（新库只打版本标记）；必须在 enableForeignKeys() 之前，
+        // 保证 PRAGMA 都处在事务之外
+        migrateToFlatCategories();
         enableForeignKeys();
     }
 }

@@ -6,8 +6,9 @@ import CtrlBase from "../../CtrlBase";
  * 分类节点的右键菜单（模块单例）。
  * 平时不在 DOM 里：第一次 open() 时才把模板挂到 document.body
  * （不能挂在 #category 里，那个容器 overflow-y:auto 会把弹层裁掉），之后只切换 .open。
- * 三个菜单项按 data-action（addSibling / addChild / remove）报给 onAction，
+ * 三个菜单项按 data-action（add / rename / remove）报给 onAction，
  * 具体做什么由 Category 决定；选中态属于分类行（见 Category），菜单项本身只有 hover。
+ * 单层目录没有"增加子级分类"这一项了。
  */
 class Menu extends CtrlBase {
   /** 被右键的分类节点；将来增删分类要靠它定位（对外可读，方便后续接线） */

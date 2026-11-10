@@ -8,41 +8,33 @@ import Editor from "./Editor/Editor";
 import ArticleTitle from "../ArticleTitle/ArticleTitle";
 import StatusBar from "../StatusBar/StatusBar";
 
-/** 分类节点 */
-interface CategoryNode {
-  id: number;
-  name: string;
-  /** 子分类；省略或无子节点时为叶节点 */
-  children?: CategoryNode[];
-}
-
-/** 原生侧返回的扁平分类行 */
+/** 原生侧返回的分类行。parentId 恒为 null，只为兼容老协议保留，不再用来组树 */
 interface CategoryRow {
   id: number;
   parentId: number | null;
   name: string;
 }
 
-/** 分类编辑器的打开方式：决定提交时新增到哪、或者改名 */
-type EditorMode = "top" | "sibling" | "child" | "rename";
+/** 分类编辑器的打开方式：新增（顶层）或改名 */
+type EditorMode = "add" | "rename";
 
 /**
- * 左侧分类目录面板（模块单例）。
+ * 左侧分类目录面板（模块单例）。目录只有一层。
  * 面板即 #category 自身，由 ContentBox 挂到分栏槽位。
- * 内部先挂 Header 标题栏，再挂内容区 #categoryContent（吃掉标题栏之外的高度并负责滚动），分类树挂进内容区；
- * 启动时通过 Msg 请求原生侧从数据库读取分类，以原生 DOM 递归渲染 ul/li 树形分类。
- * 点击分工：点名称（含它的整片背景）选中/取消选中；点名称左侧的 +/− 图标展开/折叠；
- * 右键弹出 Menu 并顺手选中该分类；Menu 里的新增/改名走 Editor，提交后写库并重画分类树；
- * 删除只准删空分类（没有子分类、下面也没挂文章），挡住时把原生给的原因弹给用户。
+ * 内部先挂 Header 标题栏，再挂内容区 #categoryContent（吃掉标题栏之外的高度并负责滚动）；
+ * 启动时通过 Msg 请求原生侧从数据库读取分类，原样按一层平铺渲染成 ul/li，
+ * 没有子分类、缩进、展开/折叠，也不再往 IPC 里传 parentId。
+ * 点击名称选中/取消选中；右键弹 Menu 并顺手选中该分类；Menu 里的新增/改名走 Editor；
+ * 删除只准删名下没有文章的分类，挡住时把原生给的原因弹给用户。
  */
 class Category extends CtrlBase {
   /** 当前选中的分类行（.categoryLabel）；null 表示没有选中 */
   private selected: HTMLElement | null = null;
 
-  /** 当前选中的分类 id：重画分类树后靠它把选中还原回来 */
+  /** 当前选中的分类 id：重画列表后靠它把选中还原回来 */
   private selectedId: number | null = null;
 
-  /** 标题栏之下的内容区：分类树的滚动容器，高度 = 面板高度 - 标题栏 */
+  /** 标题栏之下的内容区：分类列表的滚动容器，高度 = 面板高度 - 标题栏 */
   private content: HTMLElement | null = null;
 
   constructor() {
@@ -56,24 +48,15 @@ class Category extends CtrlBase {
     this.content.className = "categoryContent";
     this.dom.appendChild(this.content);
 
-    // 点击用事件委托：分类树是异步渲染出来的，绑在树节点上会漏掉后渲染的那些
+    // 点击用事件委托：分类列表是异步渲染出来的，绑在节点上会漏掉后渲染的那些
     this.dom.addEventListener("click", (e) => {
-      const target = e.target as HTMLElement;
-      const label = target.closest<HTMLElement>(".categoryLabel");
+      const label = (e.target as HTMLElement).closest<HTMLElement>(".categoryLabel");
       if (!label) {
         // 点面板空白处（含标题栏那块）：取消选中
         this.applySelection(null);
         return;
       }
-      const node = label.closest<HTMLLIElement>(".categoryNode");
-      const isParent = node ? node.classList.contains("hasChildren") : false;
-      // 点父节点左侧那个 +/− 图标：只负责展开/折叠，不改变选中
-      if (isParent && target.closest(".categoryToggle")) {
-        if (node) Category.setExpanded(node, node.classList.contains("collapsed"));
-        return;
-      }
-      // 其余位置都算"点名称与它的背景区"：选中/取消选中。
-      // （叶节点左侧的减号只是分支终点，不是控件，点它和点名称同义）
+      // 单层没有展开/折叠控件，点名称、图标或整片背景都算"选中/取消选中"
       this.applySelection(this.selected === label ? null : label);
     });
 
@@ -87,13 +70,12 @@ class Category extends CtrlBase {
       Menu.open(e.clientX, e.clientY, node);
     });
 
-    // 标题栏右侧的加号：新增顶层分类（弹层始终在按钮正下方）
-    Header.onAddClick = (anchor) => this.openEditor(null, "top", anchor);
+    // 标题栏右侧的加号：新增分类（弹层始终在按钮正下方）
+    Header.onAddClick = (anchor) => this.openEditor(null, "add", anchor);
 
     // 右键菜单的动作：锚点是被右键的那个分类行（弹层贴在它下方，放不下向上翻折）
     Menu.onAction = (action, node, anchor) => {
-      if (action === "addSibling") this.openEditor(node, "sibling", anchor);
-      else if (action === "addChild") this.openEditor(node, "child", anchor);
+      if (action === "add") this.openEditor(null, "add", anchor);
       else if (action === "rename") this.openEditor(node, "rename", anchor);
       else if (action === "remove") void this.removeCategory(node);
     };
@@ -103,22 +85,14 @@ class Category extends CtrlBase {
 
   /**
    * 打开分类编辑器（贴到触发它的锚点弹出）。
-   * target 是参照分类（右键的那个节点），mode 决定提交时写到哪：
-   *   top     标题栏加号        → 新建顶层分类
-   *   sibling 右键"增加同级分类" → 与 target 同级
-   *   child   右键"增加子级分类" → 作为 target 的子分类
-   *   rename  右键"修改分类"     → 把 target 改成输入的名字（输入框里预填原名）
-   * anchor 是锚点：标题栏按钮（始终在下方）或被右键的分类行（下方放不下向上翻折）。
+   * mode = add 时新建顶层分类（target 不用）；rename 时把 target 改成输入的名字。
    */
   private openEditor(
     target: HTMLElement | null,
     mode: EditorMode,
     anchor: { rect: DOMRect; mayFlip: boolean },
   ): void {
-    const placeholder =
-      mode === "top" ? "新分类名称" :
-      mode === "sibling" ? "同级分类名称" :
-      mode === "child" ? "子分类名称" : "分类名称";
+    const placeholder = mode === "add" ? "新分类名称" : "分类名称";
     Editor.open(anchor, { value: mode === "rename" ? Category.nameOf(target) : "", placeholder }, (result) => {
       // 传局部的 mode/target：请求期间用户可能又开了编辑器，字段会被改写
       void this.applyEditorResult(mode, target, result.name);
@@ -126,7 +100,7 @@ class Category extends CtrlBase {
   }
 
   /**
-   * 提交分类编辑器：新增或改名，完成后重新加载分类树，让列表立刻反映结果。
+   * 提交分类编辑器：新增或改名，完成后重新加载列表，让界面立刻反映结果。
    * 注意"重新加载"这一步放在 try 外面且无条件执行：不管写入成功、失败还是原生侧没回应，
    * 都要重新拉一次分类——否则界面上看不到刚做的改动，也没法暴露真实状态。
    */
@@ -138,13 +112,8 @@ class Category extends CtrlBase {
         const id = Category.nodeIdOf(target);
         if (id != null) await Msg.invoke("renameCategory", { id, name });
       } else {
-        // 新增：父分类看 mode —— 同级挂到 target 的父分类下，子级挂到 target 下，顶层为 null
-        const parentId =
-          mode === "child" ? Category.nodeIdOf(target) :
-          mode === "sibling" ? Category.parentIdOf(target) : null;
-        const data = (await Msg.invoke("addCategory", parentId == null ? { name } : { name, parentId })) as
-          | { id?: number }
-          | undefined;
+        // 单层：只带 name，不传 parentId（原生侧也会忽略它，一律建顶层）
+        const data = (await Msg.invoke("addCategory", { name })) as { id?: number } | undefined;
         const newId = data?.id;
         if (typeof newId === "number" && newId > 0) createdId = newId;
       }
@@ -156,8 +125,8 @@ class Category extends CtrlBase {
   }
 
   /**
-   * 删除分类。只删空分类：下面还挂着子分类或文章的，原生侧会挡回来并给一句原因，
-   * 这里把原因弹给用户；确认框也因此不再提"连同子分类一起删"。
+   * 删除分类。只删名下没有文章的分类，原生侧会挡回被占用的并给一句原因，
+   * 这里把原因弹给用户。
    */
   private async removeCategory(node: HTMLElement | null): Promise<void> {
     const id = Category.nodeIdOf(node);
@@ -169,7 +138,7 @@ class Category extends CtrlBase {
 
     try {
       const data = (await Msg.invoke("removeCategory", { id })) as { ok: boolean; reason?: string };
-      // 挡回来的（有子分类 / 有文章）与 id 不存在都走这里：把原生给的原因原样弹出来
+      // 挡回来的（有文章）与 id 不存在都走这里：把原生给的原因原样弹出来
       if (!data?.ok) window.alert(data?.reason || "删除失败");
     } catch {
       // 原生侧没回应（消息丢失）：没有原因可弹，直接刷新反映真实状态
@@ -199,74 +168,28 @@ class Category extends CtrlBase {
     return id ? Number(id) : null;
   }
 
-  /** 取节点的父分类 id；顶层分类返回 null */
-  private static parentIdOf(node: HTMLElement | null): number | null {
-    // 节点在 .categoryChildren 里，往上一层 li 就是父分类
-    const parent = node?.parentElement?.closest<HTMLLIElement>(".categoryNode") ?? null;
-    return parent ? Category.nodeIdOf(parent) : null;
-  }
-
   /** 取节点显示的名称（改名时用来预填输入框） */
   private static nameOf(node: HTMLElement | null): string {
     return node?.querySelector<HTMLElement>(":scope > .categoryLabel > .categoryName")?.textContent ?? "";
   }
 
-  /** 请求原生侧读取分类，并把扁平数据组织成树后渲染；selectId 指定重画后选中哪个分类 */
+  /** 请求原生侧读取分类并平铺渲染；selectId 指定重画后选中哪个分类 */
   private async loadAndRender(selectId: number | null = null): Promise<void> {
     try {
       const data = await Msg.invoke("getCategories");
       const rows: CategoryRow[] = (data as { categories?: CategoryRow[] }).categories ?? [];
-      this.renderTree(Category.toTree(rows), selectId);
+      this.renderList(rows, selectId);
     } catch {
-      // 读取失败时渲染空树，避免阻塞其余面板
-      this.renderTree([], selectId);
+      // 读取失败时渲染空列表，避免阻塞其余面板
+      this.renderList([], selectId);
     }
     // 分类数可能刚变过（新增/删除）：让状态栏重新数一次
     void StatusBar.refreshCounts();
   }
 
-  /** 把原生侧返回的扁平分类行组织成多级树（保持传入顺序，父在前） */
-  private static toTree(rows: CategoryRow[]): CategoryNode[] {
-    const byId = new Map<number, CategoryNode>();
-    for (const row of rows) {
-      byId.set(row.id, { id: row.id, name: row.name });
-    }
-    const roots: CategoryNode[] = [];
-    // 按行顺序把节点挂到父节点 children
-    for (const row of rows) {
-      const node = byId.get(row.id)!;
-      if (row.parentId != null && byId.has(row.parentId)) {
-        const parent = byId.get(row.parentId)!;
-        parent.children ??= [];
-        parent.children.push(node);
-      } else {
-        roots.push(node);
-      }
-    }
-    return roots;
-  }
-
-  /** 展开态图标：方框内一个减号 */
-  private static readonly expandedIcon = "icon-removeRect";
-  /** 折叠态图标：方框内一个加号 */
-  private static readonly collapsedIcon = "icon-addRect";
-
-  /**
-   * 切换节点展开态。
-   * collapsed 类与图标字形必须一起变，集中在此处修改，避免状态与图标对不上。
-   */
-  private static setExpanded(li: HTMLLIElement, expanded: boolean): void {
-    li.classList.toggle("collapsed", !expanded);
-    // 只找本节点自己的图标位，不能用 document 级查询，否则会改到别的节点
-    const toggle = li.querySelector<HTMLElement>(":scope > .categoryLabel > .categoryToggle");
-    if (!toggle) return;
-    toggle.classList.toggle(Category.expandedIcon, expanded);
-    toggle.classList.toggle(Category.collapsedIcon, !expanded);
-  }
-
-  /** 递归构建分类树 DOM，挂到 #category；selectId 用于指定重画后选中哪个分类 */
-  private renderTree(nodes: CategoryNode[], selectId: number | null = null): void {
-    // 新增/改名后是整棵重建，先把旧树摘掉，避免叠上去
+  /** 把分类原样渲染成一层列表，挂到 #category；selectId 用于指定重画后选中哪个分类 */
+  private renderList(rows: CategoryRow[], selectId: number | null = null): void {
+    // 新增/改名后是整表重建，先把旧列表摘掉，避免叠上去
     const content = this.content;
     if (!content) return;
     content.querySelector(".categoryTree")?.remove();
@@ -275,8 +198,8 @@ class Category extends CtrlBase {
 
     const root = document.createElement("ul");
     root.className = "categoryTree";
-    for (const node of nodes) {
-      root.appendChild(this.buildNode(node));
+    for (const row of rows) {
+      root.appendChild(this.buildNode(row));
     }
     content.appendChild(root);
 
@@ -291,43 +214,25 @@ class Category extends CtrlBase {
     this.applySelection(label);
   }
 
-  /**
-   * 构建单个分类节点（li）。
-   * 只负责结构和图标字形，点击/右键这些交互统一交给 ready() 里的委托处理。
-   */
-  private buildNode(node: CategoryNode): HTMLLIElement {
+  /** 构建单个分类节点（li）：图标位 + 名称，没有子树、没有展开/折叠 */
+  private buildNode(row: CategoryRow): HTMLLIElement {
     const li = document.createElement("li");
     li.className = "categoryNode";
-    li.dataset.id = String(node.id);
+    li.dataset.id = String(row.id);
 
     const label = document.createElement("div");
     label.className = "categoryLabel";
 
-    // 图标位：父节点由 setExpanded 切换 +/−，叶节点在下面固定为减号
-    const toggle = document.createElement("i");
-    toggle.className = "icon categoryToggle";
-    label.appendChild(toggle);
+    // 固定的分类图标位：只是列表装饰，不再有展开/折叠语义（点它等同于点名称）
+    const icon = document.createElement("i");
+    icon.className = "icon categoryToggle icon-removeRect";
+    label.appendChild(icon);
 
     const name = document.createElement("span");
     name.className = "categoryName";
-    name.textContent = node.name;
+    name.textContent = row.name;
     label.appendChild(name);
     li.appendChild(label);
-
-    if (node.children && node.children.length > 0) {
-      li.classList.add("hasChildren");
-      Category.setExpanded(li, true); // 默认展开，显示减号
-
-      const childUl = document.createElement("ul");
-      childUl.className = "categoryChildren";
-      for (const child of node.children) {
-        childUl.appendChild(this.buildNode(child));
-      }
-      li.appendChild(childUl);
-    } else {
-      // 叶节点没有可折叠的子级，固定用减号作为分支终点，让同级的图标连成一条线
-      toggle.classList.add(Category.expandedIcon);
-    }
 
     return li;
   }
